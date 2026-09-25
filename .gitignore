@@ -1,3 +1,27 @@
-build*/
-dist/
+# CMake build and install output
+/build*/
+/cmake-build-*/
+/dist/
+/CMakeFiles/
+/CMakeCache.txt
+/cmake_install.cmake
+/CTestTestfile.cmake
+/Testing/
+/install_manifest.txt
+/compile_commands.json
+
+# Generated captures
+/screenshots/
+.cua-shot-*
+
+# Local caches and macOS metadata
 .cache/
+.DS_Store
+._*
+
+# Editor temporary files
+*.swp
+*.swo
+*~
+
+# Keep vendor/cua/lib: the pinned SDK is required to build offline.
