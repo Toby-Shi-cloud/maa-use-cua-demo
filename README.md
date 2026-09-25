@@ -27,6 +27,20 @@ cmake --build build
 ./build/cua-shot --app Arknights --click --x 2464 --y 1960
 ```
 
+后台拖拽使用窗口截图左上角的像素坐标。程序会在同一张截图上校验起点和终点，
+然后按 `mouseMoved -> mouseDown -> mouseDragged* -> mouseUp` 顺序把事件发送到目标 PID，
+窗口不需要切到前台：
+
+```sh
+./build/cua-shot --app Arknights --drag \
+  --from-x 1200 --from-y 900 --to-x 2200 --to-y 900 \
+  --duration-ms 700 --steps 28
+```
+
+`--button left|right|middle` 可选择按钮，`--dry-run` 只截图并校验坐标而不发送事件。
+拖拽默认使用后台投递；坐标来自截图 PNG，Retina 缩放和窗口屏幕位置由 CUA 返回的
+`window_bounds`/`screenshot_scale` 自动换算。
+
 可以将明日方舟窗口放在后台尝试点击（注意，请不要隐藏窗口、最小化窗口、或放在台前调度的后台）
 
 我的测试环境：
@@ -38,3 +52,44 @@ macOS 27.0
 ## 其他
 
 [README_chatgpt.md](README_chatgpt.md) 是 ChatGPT 写的详细的使用方案。
+
+## 实验现状
+
+```
+CG/SkyLight background click
+        ↓
+Arknights ✅
+
+
+CG/SkyLight background mouse drag
+        ↓
+Finder ✅
+Arknights ❌
+
+
+CG/SkyLight live-relay real trackpad scroll
+        ↓
+Finder ✅
+Touch Alternatives Sample ❌
+Arknights ❌
+
+
+真实 Trackpad
+pointer 在后台 Arknights 上
+        ↓
+Arknights ✅
+
+
+foreground CUA mouse drag
+        ↓
+抢 cursor
+        ↓
+Arknights ✅
+
+
+Karabiner Virtual HID Mouse
+        ↓
+真正 HID dx/dy
+        ↓
+抢 cursor ✅
+```
