@@ -37,7 +37,7 @@ double coordinate(const std::string& text) {
 asio::awaitable<int> run(int argc, char** argv, std::unique_ptr<Driver>& runtime) {
     std::string app, title, output, button = "left", delivery = "background";
     std::optional<double> x, y;
-    long long count = 1;
+    long long count = 1, max_dimension = 0;
     bool click = false, dry_run = false, click_option = false;
     long long window_id = 0, pid = 0;
     bool list = false, all = false, permissions = false;
@@ -46,6 +46,7 @@ asio::awaitable<int> run(int argc, char** argv, std::unique_ptr<Driver>& runtime
         if (arg == "--help" || arg == "-h") {
             std::cout << "Usage: cua-shot --app NAME --output FILE.png [options]\n"
                          "       cua-shot --app NAME --click --x X --y Y [--output BEFORE.png]\n"
+                         "  --max-dimension N Screenshot long-edge limit; 0 = native (default)\n"
                          "  --click           Click in window screenshot coordinates\n"
                          "  --x X --y Y       Pixels from screenshot top-left (not screen coordinates)\n"
                          "  --button BUTTON   left, right or middle (default left)\n"
@@ -71,7 +72,7 @@ asio::awaitable<int> run(int argc, char** argv, std::unique_ptr<Driver>& runtime
         if (arg == "--all") { all = true; continue; }
         if (arg != "--app" && arg != "--title" && arg != "--window-id" &&
             arg != "--pid" && arg != "--output" && arg != "-o" &&
-            arg != "--x" && arg != "--y" && arg != "--button" && arg != "--count" && arg != "--delivery")
+            arg != "--x" && arg != "--y" && arg != "--button" && arg != "--count" && arg != "--delivery" && arg != "--max-dimension")
             throw std::runtime_error("Unknown option: " + arg);
         if (++i == argc || std::string(argv[i]).empty()) throw std::runtime_error("Missing value for " + arg);
         std::string value = argv[i];
@@ -79,6 +80,11 @@ asio::awaitable<int> run(int argc, char** argv, std::unique_ptr<Driver>& runtime
         else if (arg == "--title") title = value;
         else if (arg == "--window-id") window_id = positive(value);
         else if (arg == "--pid") pid = positive(value);
+        else if (arg == "--max-dimension") {
+            max_dimension = value == "0" ? 0 : positive(value);
+            if (max_dimension > std::numeric_limits<uint32_t>::max())
+                throw std::runtime_error("--max-dimension exceeds uint32 range.");
+        }
         else if (arg == "--x") x = coordinate(value);
         else if (arg == "--y") y = coordinate(value);
         else if (arg == "--button") { button = value; click_option = true; }
@@ -139,6 +145,12 @@ asio::awaitable<int> run(int argc, char** argv, std::unique_ptr<Driver>& runtime
         throw std::runtime_error("Multiple windows with unknown stacking order; use --window-id.");
     if (click && !selected.value("is_on_screen", false))
         throw std::runtime_error("Pixel click requires an on-screen window.");
+    // Named session keeps this override in memory in Cua 0.28.2.
+    const std::string session = "cua-shot";
+    json session_args = {{"session", session}};
+    co_await driver.call("start_session", session_args);
+    json config_args = {{"session", session}, {"max_image_dimension", max_dimension}};
+    co_await driver.call("set_config", config_args);
     auto target = output.empty() ? fs::temp_directory_path() / "cua-click.png" : fs::absolute(output);
     fs::create_directories(target.parent_path());
     // Stage on the same filesystem, so failed capture cannot destroy an old output.
@@ -149,7 +161,7 @@ asio::awaitable<int> run(int argc, char** argv, std::unique_ptr<Driver>& runtime
     if (fd < 0) throw std::runtime_error("Cannot create output temp file: " + std::string(std::strerror(errno)));
     close(fd);
     struct Cleanup { fs::path path; ~Cleanup() { std::error_code ec; fs::remove(path, ec); } } cleanup{temp.data()};
-    json capture = {{"pid", selected.at("pid")}, {"window_id", selected.at("window_id")},
+    json capture = {{"session", session}, {"pid", selected.at("pid")}, {"window_id", selected.at("window_id")},
                     {"include_accessibility_tree", false}, {"include_screenshot", true}};
     capture["screenshot_out_file"] = cleanup.path.string();
     std::string response;
@@ -175,6 +187,13 @@ asio::awaitable<int> run(int argc, char** argv, std::unique_ptr<Driver>& runtime
         return value;
     };
     auto width = dimension(0), height = dimension(4);
+    if (click) {
+        auto metadata = json::parse(response);
+        std::cerr << "Click frame: PNG=" << width << "x" << height
+                  << " window_bounds=" << metadata.value("window_bounds", json{}).dump()
+                  << " backing_scale=" << metadata.value("screenshot_scale", json{}).dump()
+                  << " frame_valid=" << metadata.value("screenshot_frame_valid", json{}).dump() << '\n';
+    }
     if (click && (*x >= width || *y >= height))
         throw std::runtime_error("Click outside screenshot bounds: " + std::to_string(width) + "x" + std::to_string(height));
     image.close();
@@ -184,13 +203,16 @@ asio::awaitable<int> run(int argc, char** argv, std::unique_ptr<Driver>& runtime
                   << ", window " << selected.at("window_id") << ")\n";
     }
     if (click) {
-        json request = {{"pid", selected.at("pid")}, {"window_id", selected.at("window_id")},
+        json request = {{"session", session}, {"pid", selected.at("pid")}, {"window_id", selected.at("window_id")},
                         {"x", *x}, {"y", *y}, {"button", button}, {"count", count},
                         {"delivery_mode", delivery}};
         if (dry_run) std::cout << "Validated click (not sent): " << request.dump() << '\n';
         else {
             auto clicked = co_await driver.call("click", request);
             std::cout << "Click response: " << clicked.dump() << '\n';
+            if (clicked.value("route", "") == "accessibility" || clicked.value("path", "") == "ax")
+                std::cerr << "Note: Cua delivered AXPress to an accessibility element, not a precise mouse event. "
+                             "Background delivery was preserved; the UI effect is not verified.\n";
         }
     }
     co_return 0;
