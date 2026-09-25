@@ -89,3 +89,35 @@ asio::awaitable<void> inspect(Driver& driver) {
 CLI 使用 `asio::io_context` + `co_spawn` 驱动协程。`call` / `shutdown` 不阻塞事件循环等待 C 回调；
 初始化和本地文件读写仍是同步操作。Driver 必须存活到所有调用及 shutdown 完成，io_context 必须持续运行至完成。
 目前未桥接 Asio cancellation slot，不提供超时或主动取消；不能通过提前销毁 Driver 来取消正在进行的调用。
+
+## 窗口点击
+
+```sh
+# 先截图查看坐标；坐标是 PNG 像素，不是屏幕坐标或 macOS point
+./build/cua-shot --app Code -o ./screenshots/before.png
+
+# 左键点击，默认后台投递
+./build/cua-shot --app Code --click --x 100 --y 100
+
+# 双击 / 右键 / 显式前台投递
+./build/cua-shot --window-id 14593 --click --x 100 --y 100 --count 2
+./build/cua-shot --window-id 14593 --click --x 100 --y 100 --button right
+./build/cua-shot --window-id 14593 --click --x 100 --y 100 --delivery foreground
+
+# 只刷新截图、验证目标和坐标，不发送点击
+./build/cua-shot --app Code --click --x 100 --y 100 --dry-run
+```
+
+`--button` 支持 left/right/middle；`--count` 支持 1/2。`--x`、`--y` 必须是非负有限数值。
+点击前在同一 runtime 中调用 `get_window_state` 建立最新坐标映射，再调用 `click`。
+点击必须唯一匹配一个可见窗口；有多个窗口时用 `--title` 或 `--window-id` 缩小范围。
+坐标基于当次截图，窗口大小或 SDK 缩放配置改变后请重新确定坐标。
+SDK 负责 Retina/缩放换算，CLI 不添加屏幕偏移。越界坐标在投递前拒绝。
+
+点击时 `--output` 可选，指定后保存的是**点击前**的截图；未指定时临时截图会自动清理。
+后台投递失败不会自动切换前台。`--delivery foreground` 会按 SDK 行为临时前置窗口再恢复原应用。
+点击通常需要启动宿主的辅助功能权限，可用 `--check-permissions` 查询。
+输出 `Click response` 代表 SDK 调用返回，实际 UI 效果仍应通过再次截图确认。
+
+验证：编译通过，9 项无效参数检查通过，真实 Code 窗口 `--dry-run` 成功。
+尚未向实际应用投递测试点击，也未验证 UI 点击效果。

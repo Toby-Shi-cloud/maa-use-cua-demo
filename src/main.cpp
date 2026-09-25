@@ -5,6 +5,8 @@
 #include <cerrno>
 #include <charconv>
 #include <cstring>
+#include <cmath>
+#include <optional>
 #include <filesystem>
 #include <fstream>
 #include <iostream>
@@ -24,14 +26,32 @@ long long positive(const std::string& text) {
     return value;
 }
 
+double coordinate(const std::string& text) {
+    double value = 0;
+    auto [end, ec] = std::from_chars(text.data(), text.data() + text.size(), value);
+    if (ec != std::errc{} || end != text.data() + text.size() || !std::isfinite(value) || value < 0)
+        throw std::runtime_error("Expected a finite non-negative coordinate: " + text);
+    return value;
+}
+
 asio::awaitable<int> run(int argc, char** argv, std::unique_ptr<Driver>& runtime) {
-    std::string app, title, output;
+    std::string app, title, output, button = "left", delivery = "background";
+    std::optional<double> x, y;
+    long long count = 1;
+    bool click = false, dry_run = false, click_option = false;
     long long window_id = 0, pid = 0;
     bool list = false, all = false, permissions = false;
     for (int i = 1; i < argc; ++i) {
         std::string arg = argv[i];
         if (arg == "--help" || arg == "-h") {
             std::cout << "Usage: cua-shot --app NAME --output FILE.png [options]\n"
+                         "       cua-shot --app NAME --click --x X --y Y [--output BEFORE.png]\n"
+                         "  --click           Click in window screenshot coordinates\n"
+                         "  --x X --y Y       Pixels from screenshot top-left (not screen coordinates)\n"
+                         "  --button BUTTON   left, right or middle (default left)\n"
+                         "  --count N         1 or 2 (default 1)\n"
+                         "  --delivery MODE   background (default) or foreground\n"
+                         "  --dry-run         Capture and validate click, but do not send it\n"
                          "       cua-shot --list [--app NAME] [--all]\n"
                          "  --app NAME        Exact app name from --list (case-sensitive)\n"
                          "  --title TEXT      Window title contains TEXT\n"
@@ -44,11 +64,14 @@ asio::awaitable<int> run(int argc, char** argv, std::unique_ptr<Driver>& runtime
                          "Multiple matches: select the highest z_index (frontmost).\n";
             co_return 0;
         }
+        if (arg == "--click") { click = true; continue; }
+        if (arg == "--dry-run") { dry_run = true; continue; }
         if (arg == "--check-permissions") { permissions = true; continue; }
         if (arg == "--list") { list = true; continue; }
         if (arg == "--all") { all = true; continue; }
         if (arg != "--app" && arg != "--title" && arg != "--window-id" &&
-            arg != "--pid" && arg != "--output" && arg != "-o")
+            arg != "--pid" && arg != "--output" && arg != "-o" &&
+            arg != "--x" && arg != "--y" && arg != "--button" && arg != "--count" && arg != "--delivery")
             throw std::runtime_error("Unknown option: " + arg);
         if (++i == argc || std::string(argv[i]).empty()) throw std::runtime_error("Missing value for " + arg);
         std::string value = argv[i];
@@ -56,11 +79,26 @@ asio::awaitable<int> run(int argc, char** argv, std::unique_ptr<Driver>& runtime
         else if (arg == "--title") title = value;
         else if (arg == "--window-id") window_id = positive(value);
         else if (arg == "--pid") pid = positive(value);
+        else if (arg == "--x") x = coordinate(value);
+        else if (arg == "--y") y = coordinate(value);
+        else if (arg == "--button") { button = value; click_option = true; }
+        else if (arg == "--count") { count = positive(value); click_option = true; }
+        else if (arg == "--delivery") { delivery = value; click_option = true; }
         else output = value;
     }
-    if (!permissions && !list && (output.empty() || (app.empty() && !window_id && !pid)))
-        throw std::runtime_error("Provide --app, --pid or --window-id and --output. See --help.");
-    if (!permissions && !list && fs::path(output).extension() != ".png")
+    if ((click && (list || permissions)) || (list && permissions))
+        throw std::runtime_error("--click, --list and --check-permissions are mutually exclusive.");
+    if (!click && (x || y || dry_run || click_option))
+        throw std::runtime_error("Click options require --click.");
+    if (click && (!x || !y)) throw std::runtime_error("--click requires both --x and --y.");
+    if (button != "left" && button != "right" && button != "middle")
+        throw std::runtime_error("--button must be left, right or middle.");
+    if (delivery != "background" && delivery != "foreground")
+        throw std::runtime_error("--delivery must be background or foreground.");
+    if (count > 2) throw std::runtime_error("--count must be 1 or 2.");
+    if (!permissions && !list && ((!click && output.empty()) || (app.empty() && !window_id && !pid)))
+        throw std::runtime_error("Provide --app, --pid or --window-id and either --output or --click. See --help.");
+    if (!permissions && !list && !output.empty() && fs::path(output).extension() != ".png")
         throw std::runtime_error("Output must have a .png extension.");
     json query = {{"on_screen_only", !all && !window_id}};
     if (pid) query["pid"] = pid;
@@ -93,11 +131,15 @@ asio::awaitable<int> run(int argc, char** argv, std::unique_ptr<Driver>& runtime
         return w.contains("z_index") && w["z_index"].is_number_integer()
             ? w["z_index"].get<long long>() : std::numeric_limits<long long>::min();
     };
+    if (click && matches.size() != 1)
+        throw std::runtime_error("Click matched multiple windows; narrow with --title or --window-id.");
     auto selected = matches.front();
     for (const auto& w : matches) if (rank(w) > rank(selected)) selected = w;
     if (matches.size() > 1 && rank(selected) == std::numeric_limits<long long>::min())
         throw std::runtime_error("Multiple windows with unknown stacking order; use --window-id.");
-    auto target = fs::absolute(output);
+    if (click && !selected.value("is_on_screen", false))
+        throw std::runtime_error("Pixel click requires an on-screen window.");
+    auto target = output.empty() ? fs::temp_directory_path() / "cua-click.png" : fs::absolute(output);
     fs::create_directories(target.parent_path());
     // Stage on the same filesystem, so failed capture cannot destroy an old output.
     std::string pattern = (target.parent_path() / ".cua-shot-XXXXXX").string();
@@ -122,10 +164,35 @@ asio::awaitable<int> run(int argc, char** argv, std::unique_ptr<Driver>& runtime
     constexpr std::array<unsigned char, 8> png{137, 80, 78, 71, 13, 10, 26, 10};
     if (signature != png || fs::file_size(cleanup.path) <= 8)
         throw std::runtime_error("Driver returned no PNG. Check Screen Recording permission.\n" + response);
+    // PNG IHDR stores pixel dimensions as big-endian integers.
+    image.seekg(16);
+    std::array<unsigned char, 8> dimensions{};
+    if (!image.read(reinterpret_cast<char*>(dimensions.data()), dimensions.size()))
+        throw std::runtime_error("PNG is missing dimensions.");
+    auto dimension = [&](int offset) {
+        uint32_t value = 0;
+        for (int i = offset; i < offset + 4; ++i) value = (value << 8) | dimensions[i];
+        return value;
+    };
+    auto width = dimension(0), height = dimension(4);
+    if (click && (*x >= width || *y >= height))
+        throw std::runtime_error("Click outside screenshot bounds: " + std::to_string(width) + "x" + std::to_string(height));
     image.close();
-    fs::rename(cleanup.path, target);
-    std::cout << "Saved " << target << " (" << selected.value("app_name", "")
-              << ", window " << selected.at("window_id") << ")\n";
+    if (!output.empty()) {
+        fs::rename(cleanup.path, target);
+        std::cout << "Saved " << target << " (" << selected.value("app_name", "")
+                  << ", window " << selected.at("window_id") << ")\n";
+    }
+    if (click) {
+        json request = {{"pid", selected.at("pid")}, {"window_id", selected.at("window_id")},
+                        {"x", *x}, {"y", *y}, {"button", button}, {"count", count},
+                        {"delivery_mode", delivery}};
+        if (dry_run) std::cout << "Validated click (not sent): " << request.dump() << '\n';
+        else {
+            auto clicked = co_await driver.call("click", request);
+            std::cout << "Click response: " << clicked.dump() << '\n';
+        }
+    }
     co_return 0;
 }
 
