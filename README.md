@@ -12,6 +12,12 @@ cmake -S . -B build
 cmake --build build
 ```
 
+离线检查录制格式与合成 Gesture 事件（不会操作目标 App）：
+
+```sh
+ctest --test-dir build --output-on-failure
+```
+
 尝试截屏，第一次使用的时候可能会失败（会提示需要权限）。由于这是个 cli，所以需要启动这个 cli 的父进程有权限（如 Terminal.app 或者 VSCode.app）。(截图权限叫做「录屏与系统录音」)
 
 ```sh
@@ -42,6 +48,14 @@ cmake --build build
 
 `--gesture` 要求每步至少 8 毫秒，例如 33 步需 `--duration-ms 264` 或更长；过短的序列
 曾在 Arknights 中表现为一次点击，而非滑动。
+
+`--gesture-click` 是独立的手势点击实验入口。它发送一个极小位移的 ScrollWheel + Gesture
+开始／结束序列，不调用 CUA 的鼠标点击；`--x/--y` 仍是截图像素，默认保持 80 毫秒：
+
+```sh
+./build/cua-shot --app Arknights --gesture-click --x 2464 --y 1960 --dry-run
+./build/cua-shot --app Arknights --gesture-click --x 2464 --y 1960
+```
 
 可以将明日方舟窗口放在后台尝试点击（注意，请不要隐藏窗口、最小化窗口、或放在台前调度的后台）
 
@@ -90,8 +104,12 @@ Arknights ✅
 
 CG/SkyLight synthesized scroll + gesture
         ↓
-Touch Alternatives Sample 待验证
-Arknights 待验证
+Arknights 后台水平／竖直位移 ✅
+
+
+CG/SkyLight synthesized gesture click
+        ↓
+Arknights ✅
 
 
 真实 Trackpad

@@ -27,3 +27,26 @@ target_link_libraries(cua-shot PRIVATE cua_sdk nlohmann_json::nlohmann_json Thre
 target_compile_options(cua-shot PRIVATE -Wall -Wextra -Wpedantic)
 install(TARGETS cua-shot RUNTIME DESTINATION bin)
 install(FILES "${CUA_SDK_ROOT}/lib/libcua_driver_sdk.dylib" DESTINATION lib)
+
+include(CTest)
+if(BUILD_TESTING)
+  enable_language(OBJCXX)
+
+  add_executable(gesture-smoke scripts/tests/gesture_smoke.mm)
+  set_target_properties(gesture-smoke PROPERTIES
+    OBJCXX_STANDARD 20 OBJCXX_STANDARD_REQUIRED YES OBJCXX_EXTENSIONS NO)
+  target_compile_options(gesture-smoke PRIVATE -Wall -Wextra -Wpedantic)
+  target_link_libraries(gesture-smoke PRIVATE
+    "-framework AppKit" "-framework ApplicationServices" "-framework CoreFoundation")
+  add_test(NAME gesture_smoke COMMAND $<TARGET_FILE:gesture-smoke>)
+
+  add_executable(recording-smoke scripts/tests/recording_smoke.cpp)
+  target_compile_features(recording-smoke PRIVATE cxx_std_20)
+  set_target_properties(recording-smoke PROPERTIES CXX_EXTENSIONS OFF)
+  target_compile_options(recording-smoke PRIVATE -Wall -Wextra -Wpedantic)
+  target_link_libraries(recording-smoke PRIVATE
+    "-framework ApplicationServices" "-framework CoreFoundation")
+  file(MAKE_DIRECTORY "${CMAKE_CURRENT_BINARY_DIR}/test-output")
+  add_test(NAME recording_smoke COMMAND $<TARGET_FILE:recording-smoke>
+    "${CMAKE_CURRENT_BINARY_DIR}/test-output/recording-smoke.cgevents")
+endif()

@@ -132,4 +132,36 @@ inline void swipe(pid_t pid, uint32_t window_id, double bounds_x, double bounds_
     step(steps, kCGScrollPhaseEnded, 0, 0);
 }
 
+// Experimental tap candidate. A one-point translation is enough to give the
+// ScrollDrag module a nonzero gesture while keeping the contact almost stationary.
+// Only the target application's response can establish whether it is a tap.
+inline void tap_with_route(const Route& route, pid_t pid, uint32_t window_id,
+                           CGPoint local, CGPoint screen, uint64_t duration_ms) {
+    send(make_scroll(nullptr, 1, 0, kCGScrollPhaseBegan),
+         route, pid, window_id, local, screen);
+    send(make_gesture(nullptr, false, kCGScrollPhaseBegan, 0, 0),
+         route, pid, window_id, local, screen);
+    send(make_gesture(nullptr, true, kCGScrollPhaseBegan, 1, 0),
+         route, pid, window_id, local, screen);
+    std::this_thread::sleep_for(std::chrono::milliseconds(duration_ms));
+    send(make_scroll(nullptr, 0, 0, kCGScrollPhaseEnded),
+         route, pid, window_id, local, screen);
+    send(make_gesture(nullptr, false, kCGScrollPhaseEnded, 0, 0),
+         route, pid, window_id, local, screen);
+    send(make_gesture(nullptr, true, kCGScrollPhaseEnded, 0, 0),
+         route, pid, window_id, local, screen);
+}
+
+inline void tap(pid_t pid, uint32_t window_id, double bounds_x, double bounds_y,
+                double screenshot_scale, double x, double y, uint64_t duration_ms) {
+    if (pid <= 0 || window_id == 0 || !std::isfinite(bounds_x) ||
+        !std::isfinite(bounds_y) || !std::isfinite(screenshot_scale) ||
+        screenshot_scale <= 0 || !std::isfinite(x) || !std::isfinite(y) ||
+        x < 0 || y < 0 || duration_ms < 20 || duration_ms > 500)
+        throw std::runtime_error("Invalid synthetic gesture tap parameters.");
+    const CGPoint local = CGPointMake(x / screenshot_scale, y / screenshot_scale);
+    const CGPoint screen = CGPointMake(bounds_x + local.x, bounds_y + local.y);
+    tap_with_route(resolve_route(), pid, window_id, local, screen, duration_ms);
+}
+
 } // namespace macos_gesture
