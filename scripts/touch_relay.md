@@ -10,8 +10,9 @@ iPad App 在 Mac 上运行时，普通后台鼠标拖拽无法稳定触发应用
 | --- | --- | --- |
 | 只转发连续 ScrollWheel | 未产生目标操作 | 未产生目标操作 |
 | 按回调顺序转发 ScrollWheel 和原始类型 29 | 成功操作 | 成功操作 |
+| 录制后独立重放 ScrollWheel 和原始类型 29 | 成功操作 | 成功操作 |
 
-第二行由用户在两个目标上实际验证。它仍以**真实触控板手势**为输入源；没有验证独立生成事件序列、最小化窗口、完全遮挡时的行为或重复成功率。
+第二、三行均由用户在两个目标上实际验证。第二行仍以**实时触控板手势**为输入源；第三行重放时不依赖实时手势。尚未验证完全合成事件、最小化窗口、完全遮挡时的行为或重复成功率。
 
 ## 构建和运行
 
@@ -47,4 +48,31 @@ cmake --build build --target live-relay
 
 ## 后续验证
 
-在 Xcode sample 中可以分别观察 `UINSGameModuleScrollDrag scrollWheel:`、`UINSVirtualDigitizer addVirtualFingerAtLoc:forKey:` 和 `modifyVirtualFingerForKey:withBlock:` 的命中情况，并以画面移动及后续操作正常作为最终判据。还需用不同窗口遮挡程度和多次手势测可靠性。若目标是无人值守自动化，下一项独立实验是记录成功的原始事件序列，再验证无实时触控板输入时能否重放；本工具当前不提供这种重放能力。
+在 Xcode sample 中可以分别观察 `UINSGameModuleScrollDrag scrollWheel:`、`UINSVirtualDigitizer addVirtualFingerAtLoc:forKey:` 和 `modifyVirtualFingerForKey:withBlock:` 的命中情况，并以画面移动及后续操作正常作为最终判据。独立重放已在 sample 和 Arknights 上成功；不同窗口遮挡程度和多次手势的可靠性仍需分别验证。
+
+## 记录与独立重放实验
+
+运行记录模式后做**一次**真实双指手势，手势结束后按 Ctrl-C。文件记录连续 ScrollWheel
+及原始类型 29 的扁平化 CGEvent、类型与相对时间。记录模式不会拦截原手势，也不会投递。
+
+```sh
+./build/live-relay --record gesture.cgevents
+./build/live-relay --inspect gesture.cgevents
+./build/live-relay --replay gesture.cgevents PID WINDOW_ID [LOCAL_X LOCAL_Y]
+```
+
+`--record` 拒绝覆盖已有文件；`.cgevents` 已被 Git 忽略，因为原始事件可能含设备、
+进程与坐标信息。`--inspect` 离线验证文件并显示事件数、顺序和间隔，不需要输入权限。
+`--replay` 在投递前验证所有已保存记录，把事件时间戳平移到当前运行时，并按原间隔发送到
+目标窗口；这次运行不需要实时触控板输入。
+
+旧版记录使用 CGEvent 自带时间戳；实测 ScrollWheel 与 Gesture 在 tap 中按顺序到达时，
+时间戳仍可能倒退数百微秒。读取旧文件会保持回调顺序，并将倒退的时间点调整到上一事件的
+时间点。新版记录改用回调到达时的单调时钟计算间隔。
+
+本机测试发现 `CGEventCreateData` 会丢失人工构造的 Gesture 字段 118/119，因此格式
+额外保存这两个 double 值，并在重放时恢复。记录时会立即重新解码，检查类型、
+ScrollWheel phase 和这两个字段能否恢复；失败则停录并标记文件无效。
+这不保证其他私有字段也被保留。用户已确认录制文件的独立重放能操作 sample 和 Arknights；
+`replay-attempt` 日志本身仍只表示投递尝试，实际效果以目标行为为准。格式只用于当前实验，
+不保证跨系统版本。

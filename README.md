@@ -74,6 +74,12 @@ Touch Alternatives Sample ❌
 Arknights ❌
 
 
+CG/SkyLight live-relay real trackpad scroll + gesture
+        ↓
+Touch Alternatives Sample ✅
+Arknights ✅
+
+
 真实 Trackpad
 pointer 在后台 Arknights 上
         ↓

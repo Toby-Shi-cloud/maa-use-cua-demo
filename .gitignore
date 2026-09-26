@@ -13,6 +13,7 @@
 # Generated captures
 /screenshots/
 .cua-shot-*
+*.cgevents
 
 # Local caches and macOS metadata
 .cache/
