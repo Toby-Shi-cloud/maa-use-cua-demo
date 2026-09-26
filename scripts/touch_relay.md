@@ -11,8 +11,9 @@ iPad App 在 Mac 上运行时，普通后台鼠标拖拽无法稳定触发应用
 | 只转发连续 ScrollWheel | 未产生目标操作 | 未产生目标操作 |
 | 按回调顺序转发 ScrollWheel 和原始类型 29 | 成功操作 | 成功操作 |
 | 录制后独立重放 ScrollWheel 和原始类型 29 | 成功操作 | 成功操作 |
+| 从零合成 ScrollWheel 和类型 29 | 尚未验证 | 后台水平、竖直位移成功 |
 
-第二、三行均由用户在两个目标上实际验证。第二行仍以**实时触控板手势**为输入源；第三行重放时不依赖实时手势。尚未验证完全合成事件、最小化窗口、完全遮挡时的行为或重复成功率。
+第二、三行均由用户在两个目标上实际验证。第二行仍以**实时触控板手势**为输入源；第三行重放时不依赖实时手势。第四行由用户在 Arknights 后台验证，无需录制文件或实时手势。合成事件在 sample、最小化窗口、完全遮挡时的行为及重复成功率尚未验证。
 
 ## 构建和运行
 
@@ -48,7 +49,7 @@ cmake --build build --target live-relay
 
 ## 后续验证
 
-在 Xcode sample 中可以分别观察 `UINSGameModuleScrollDrag scrollWheel:`、`UINSVirtualDigitizer addVirtualFingerAtLoc:forKey:` 和 `modifyVirtualFingerForKey:withBlock:` 的命中情况，并以画面移动及后续操作正常作为最终判据。独立重放已在 sample 和 Arknights 上成功；不同窗口遮挡程度和多次手势的可靠性仍需分别验证。
+在 Xcode sample 中可以分别观察 `UINSGameModuleScrollDrag scrollWheel:`、`UINSVirtualDigitizer addVirtualFingerAtLoc:forKey:` 和 `modifyVirtualFingerForKey:withBlock:` 的命中情况，并以画面移动及后续操作正常作为最终判据。独立重放已在 sample 和 Arknights 上成功；合成手势已在 Arknights 后台成功。sample 的合成手势、不同窗口遮挡程度和多次手势的可靠性仍需分别验证。
 
 ## 记录与独立重放实验
 
@@ -76,3 +77,25 @@ ScrollWheel phase 和这两个字段能否恢复；失败则停录并标记文�
 这不保证其他私有字段也被保留。用户已确认录制文件的独立重放能操作 sample 和 Arknights；
 `replay-attempt` 日志本身仍只表示投递尝试，实际效果以目标行为为准。格式只用于当前实验，
 不保证跨系统版本。
+
+## 从零合成手势
+
+`cua-shot --gesture` 提供了不依赖录制文件的实验入口。它按指定时长创建连续
+ScrollWheel，并在每步发送两个类型 29 的 Gesture 事件。离线对照发现，新建的类型 29
+事件默认在 AppKit 中呈现为 subtype 0；设置私有字段 110 为 6 后，AppKit 呈现的 subtype
+与录制的位移事件一致。生成器还会设置位移字段 118/119 和目标窗口路由信息。
+
+首轮 Arknights 实测看起来只出现类似轻触的反应，没有预期的水平滑动；进一步测试确认，
+旧版命令实际触发了竖直位移。对照录制文件发现首版生成器把水平参数写进了字段 119，
+并且没有设置 Gesture 阶段。录制的水平位移主要位于字段 118；
+其位移事件字段 132 依次为 1（开始）、2（变化）、4（结束），字段 135 为 1。
+修正后，用户已在 Arknights 后台验证水平和竖直位移均可成功。录制事件还包含新建
+CGEvent 没有的附加数据；目前的成功说明这些差异没有阻止所测操作，但不证明它们在
+其他手势或系统版本中无关。
+另一次用 33 步、总时长 33 毫秒的旧版实验甚至触发了点击。新入口要求每步至少 8 毫秒，
+防止用远快于所录制节奏的参数测试。
+
+`--from-x/--from-y` 与 `--to-x/--to-y` 使用截图像素坐标。首版测试支持字段 119
+控制竖直位移，修正版测试支持字段 118 对应水平位移。先用 `--dry-run` 检查截图坐标；
+其他距离与步速、sample 以及遮挡状态仍需分别实测。不要把 `Synthetic gesture posted`
+当作成功判据。

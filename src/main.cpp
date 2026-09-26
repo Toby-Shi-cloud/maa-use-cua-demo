@@ -1,6 +1,7 @@
 #include <nlohmann/json.hpp>
 #include "driver.hpp"
 #include "macos_drag.hpp"
+#include "macos_gesture.hpp"
 #include <unistd.h>
 #include <array>
 #include <cerrno>
@@ -47,7 +48,8 @@ asio::awaitable<int> run(int argc, char** argv, std::unique_ptr<Driver>& runtime
     std::string app, title, output, button = "left", delivery = "background";
     std::optional<double> x, y, from_x, from_y, to_x, to_y;
     long long count = 1, max_dimension = 0, duration_ms = 500, steps = 20;
-    bool click = false, drag = false, dry_run = false, action_option = false, drag_option = false;
+    bool click = false, drag = false, gesture = false, dry_run = false;
+    bool action_option = false, motion_option = false, button_option = false, count_option = false;
     long long window_id = 0, pid = 0;
     bool list = false, all = false, permissions = false;
     for (int i = 1; i < argc; ++i) {
@@ -56,14 +58,16 @@ asio::awaitable<int> run(int argc, char** argv, std::unique_ptr<Driver>& runtime
             std::cout << "Usage: cua-shot --app NAME --output FILE.png [options]\n"
                          "       cua-shot --app NAME --click --x X --y Y [--output BEFORE.png]\n"
                          "       cua-shot --app NAME --drag --from-x X --from-y Y --to-x X --to-y Y\n"
+                         "       cua-shot --app NAME --gesture --from-x X --from-y Y --to-x X --to-y Y\n"
                          "  --max-dimension N Screenshot long-edge limit; 0 = native (default)\n"
                          "  --click           Click in window screenshot coordinates\n"
                          "  --drag            Background drag in screenshot coordinates\n"
+                         "  --gesture         Experimental synthetic ScrollWheel + Gesture swipe\n"
                          "  --x X --y Y       Pixels from screenshot top-left (not screen coordinates)\n"
-                         "  --from-x/--from-y Start point for --drag\n"
-                         "  --to-x/--to-y     End point for --drag\n"
-                         "  --duration-ms N   Drag duration in milliseconds (default 500)\n"
-                         "  --steps N         Drag interpolation steps, 1..200 (default 20)\n"
+                         "  --from-x/--from-y Start point for --drag or --gesture\n"
+                         "  --to-x/--to-y     End point for --drag or --gesture\n"
+                         "  --duration-ms N   Motion duration in milliseconds (default 500)\n"
+                         "  --steps N         Motion interpolation steps, 1..200 (default 20)\n"
                          "  --button BUTTON   left, right or middle (default left)\n"
                          "  --count N         1 or 2 (default 1)\n"
                          "  --delivery MODE   background (default) or foreground\n"
@@ -82,6 +86,7 @@ asio::awaitable<int> run(int argc, char** argv, std::unique_ptr<Driver>& runtime
         }
         if (arg == "--click") { click = true; continue; }
         if (arg == "--drag") { drag = true; continue; }
+        if (arg == "--gesture") { gesture = true; continue; }
         if (arg == "--dry-run") { dry_run = true; continue; }
         if (arg == "--check-permissions") { permissions = true; continue; }
         if (arg == "--list") { list = true; continue; }
@@ -110,27 +115,31 @@ asio::awaitable<int> run(int argc, char** argv, std::unique_ptr<Driver>& runtime
         else if (arg == "--from-y") from_y = coordinate(value);
         else if (arg == "--to-x") to_x = coordinate(value);
         else if (arg == "--to-y") to_y = coordinate(value);
-        else if (arg == "--button") { button = value; action_option = true; }
-        else if (arg == "--count") { count = positive(value); action_option = true; }
+        else if (arg == "--button") { button = value; action_option = true; button_option = true; }
+        else if (arg == "--count") { count = positive(value); action_option = true; count_option = true; }
         else if (arg == "--delivery") { delivery = value; action_option = true; }
-        else if (arg == "--duration-ms") { duration_ms = non_negative(value); action_option = true; drag_option = true; }
-        else if (arg == "--steps") { steps = positive(value); action_option = true; drag_option = true; }
+        else if (arg == "--duration-ms") { duration_ms = non_negative(value); action_option = true; motion_option = true; }
+        else if (arg == "--steps") { steps = positive(value); action_option = true; motion_option = true; }
         else output = value;
     }
-    if (click && drag) throw std::runtime_error("--click and --drag are mutually exclusive.");
-    if ((click || drag) && (list || permissions))
+    const bool motion = drag || gesture;
+    if (static_cast<int>(click) + static_cast<int>(drag) + static_cast<int>(gesture) > 1)
+        throw std::runtime_error("--click, --drag and --gesture are mutually exclusive.");
+    if ((click || motion) && (list || permissions))
         throw std::runtime_error("Input actions, --list and --check-permissions are mutually exclusive.");
     if (list && permissions)
         throw std::runtime_error("--list and --check-permissions are mutually exclusive.");
-    if (!click && !drag && (x || y || from_x || from_y || to_x || to_y || dry_run || action_option))
-        throw std::runtime_error("Input options require --click or --drag.");
+    if (!click && !motion && (x || y || from_x || from_y || to_x || to_y || dry_run || action_option))
+        throw std::runtime_error("Input options require --click, --drag or --gesture.");
     if (click && (!x || !y)) throw std::runtime_error("--click requires both --x and --y.");
-    if (click && (from_x || from_y || to_x || to_y || drag_option))
-        throw std::runtime_error("Drag options require --drag.");
-    if (drag && (!from_x || !from_y || !to_x || !to_y))
-        throw std::runtime_error("--drag requires --from-x, --from-y, --to-x and --to-y.");
-    if (drag && (x || y || count != 1))
-        throw std::runtime_error("Click coordinates and --count cannot be used with --drag.");
+    if (click && (from_x || from_y || to_x || to_y || motion_option))
+        throw std::runtime_error("Motion options require --drag or --gesture.");
+    if (motion && (!from_x || !from_y || !to_x || !to_y))
+        throw std::runtime_error("--drag/--gesture requires --from-x, --from-y, --to-x and --to-y.");
+    if (motion && (x || y || count != 1 || (gesture && count_option)))
+        throw std::runtime_error("Click coordinates and --count cannot be used with --drag/--gesture.");
+    if (gesture && (button_option || delivery != "background" || duration_ms == 0))
+        throw std::runtime_error("--gesture requires background delivery, positive duration and no --button.");
     if (button != "left" && button != "right" && button != "middle")
         throw std::runtime_error("--button must be left, right or middle.");
     if (delivery != "background" && delivery != "foreground")
@@ -138,8 +147,10 @@ asio::awaitable<int> run(int argc, char** argv, std::unique_ptr<Driver>& runtime
     if (count > 2) throw std::runtime_error("--count must be 1 or 2.");
     if (steps > 200) throw std::runtime_error("--steps must be between 1 and 200.");
     if (duration_ms > 10000) throw std::runtime_error("--duration-ms must be between 0 and 10000.");
-    if (!permissions && !list && ((!click && !drag && output.empty()) || (app.empty() && !window_id && !pid)))
-        throw std::runtime_error("Provide --app, --pid or --window-id and either --output, --click or --drag. See --help.");
+    if (gesture && duration_ms < steps * 8)
+        throw std::runtime_error("--gesture needs at least 8 ms per step; increase --duration-ms or reduce --steps.");
+    if (!permissions && !list && ((!click && !motion && output.empty()) || (app.empty() && !window_id && !pid)))
+        throw std::runtime_error("Provide --app, --pid or --window-id and either --output, --click, --drag or --gesture. See --help.");
     if (!permissions && !list && !output.empty() && fs::path(output).extension() != ".png")
         throw std::runtime_error("Output must have a .png extension.");
     json query = {{"on_screen_only", !all && !window_id}};
@@ -173,13 +184,13 @@ asio::awaitable<int> run(int argc, char** argv, std::unique_ptr<Driver>& runtime
         return w.contains("z_index") && w["z_index"].is_number_integer()
             ? w["z_index"].get<long long>() : std::numeric_limits<long long>::min();
     };
-    if ((click || drag) && matches.size() != 1)
+    if ((click || motion) && matches.size() != 1)
         throw std::runtime_error("Input action matched multiple windows; narrow with --title or --window-id.");
     auto selected = matches.front();
     for (const auto& w : matches) if (rank(w) > rank(selected)) selected = w;
     if (matches.size() > 1 && rank(selected) == std::numeric_limits<long long>::min())
         throw std::runtime_error("Multiple windows with unknown stacking order; use --window-id.");
-    if ((click || drag) && !selected.value("is_on_screen", false))
+    if ((click || motion) && !selected.value("is_on_screen", false))
         throw std::runtime_error("Pixel input requires an on-screen window.");
     // Named session keeps this override in memory in Cua 0.28.2.
     const std::string session = "cua-shot";
@@ -224,17 +235,17 @@ asio::awaitable<int> run(int argc, char** argv, std::unique_ptr<Driver>& runtime
     };
     auto width = dimension(0), height = dimension(4);
     json metadata;
-    if (click || drag) {
+    if (click || motion) {
         metadata = json::parse(response);
-        std::cerr << (drag ? "Drag" : "Click") << " frame: PNG=" << width << "x" << height
+        std::cerr << (gesture ? "Gesture" : drag ? "Drag" : "Click") << " frame: PNG=" << width << "x" << height
                   << " window_bounds=" << metadata.value("window_bounds", json{}).dump()
                   << " backing_scale=" << metadata.value("screenshot_scale", json{}).dump()
                   << " frame_valid=" << metadata.value("screenshot_frame_valid", json{}).dump() << '\n';
     }
     if (click && (*x >= width || *y >= height))
         throw std::runtime_error("Click outside screenshot bounds: " + std::to_string(width) + "x" + std::to_string(height));
-    if (drag && (*from_x >= width || *from_y >= height || *to_x >= width || *to_y >= height))
-        throw std::runtime_error("Drag endpoint outside screenshot bounds: " + std::to_string(width) + "x" + std::to_string(height));
+    if (motion && (*from_x >= width || *from_y >= height || *to_x >= width || *to_y >= height))
+        throw std::runtime_error("Motion endpoint outside screenshot bounds: " + std::to_string(width) + "x" + std::to_string(height));
     image.close();
     if (!output.empty()) {
         fs::rename(cleanup.path, target);
@@ -254,15 +265,17 @@ asio::awaitable<int> run(int argc, char** argv, std::unique_ptr<Driver>& runtime
                              "Background delivery was preserved; the UI effect is not verified.\n";
         }
     }
-    if (drag) {
+    if (motion) {
         json request = {
             {"session", session}, {"pid", selected.at("pid")}, {"window_id", selected.at("window_id")},
             {"from_x", *from_x}, {"from_y", *from_y}, {"to_x", *to_x}, {"to_y", *to_y},
             {"button", button}, {"duration_ms", duration_ms}, {"steps", steps}, {"delivery_mode", delivery}
         };
+        if (gesture) request.erase("button");
         if (dry_run) {
-            std::cout << "Validated drag (not sent): " << request.dump() << '\n';
-        } else if (delivery == "foreground") {
+            std::cout << "Validated " << (gesture ? "synthetic gesture" : "drag")
+                      << " (not sent): " << request.dump() << '\n';
+        } else if (drag && delivery == "foreground") {
             auto dragged = co_await driver.call("drag", request);
             std::cout << "Foreground CUA drag response: " << dragged.dump() << '\n';
         } else {
@@ -271,15 +284,23 @@ asio::awaitable<int> run(int argc, char** argv, std::unique_ptr<Driver>& runtime
             const double bounds_y = bounds.value("y", std::numeric_limits<double>::quiet_NaN());
             const double scale = metadata.value("screenshot_scale", std::numeric_limits<double>::quiet_NaN());
             if (!std::isfinite(bounds_x) || !std::isfinite(bounds_y) || !std::isfinite(scale) || scale <= 0)
-                throw std::runtime_error("Driver did not return a valid window frame for drag.");
-            macos_drag::Button drag_button = macos_drag::Button::left;
-            if (button == "right") drag_button = macos_drag::Button::right;
-            else if (button == "middle") drag_button = macos_drag::Button::middle;
-            macos_drag::drag(selected.at("pid").get<pid_t>(),
-                             selected.at("window_id").get<uint32_t>(), bounds_x, bounds_y, scale,
-                             *from_x, *from_y, *to_x, *to_y,
-                             static_cast<uint64_t>(duration_ms), static_cast<uint64_t>(steps), drag_button);
-            std::cout << "Drag delivered in background: " << request.dump() << '\n';
+                throw std::runtime_error("Driver did not return a valid window frame for motion.");
+            if (gesture) {
+                macos_gesture::swipe(selected.at("pid").get<pid_t>(),
+                    selected.at("window_id").get<uint32_t>(), bounds_x, bounds_y, scale,
+                    *from_x, *from_y, *to_x, *to_y,
+                    static_cast<uint64_t>(duration_ms), static_cast<uint64_t>(steps));
+                std::cout << "Synthetic gesture posted (effect unverified): " << request.dump() << '\n';
+            } else {
+                macos_drag::Button drag_button = macos_drag::Button::left;
+                if (button == "right") drag_button = macos_drag::Button::right;
+                else if (button == "middle") drag_button = macos_drag::Button::middle;
+                macos_drag::drag(selected.at("pid").get<pid_t>(),
+                                 selected.at("window_id").get<uint32_t>(), bounds_x, bounds_y, scale,
+                                 *from_x, *from_y, *to_x, *to_y,
+                                 static_cast<uint64_t>(duration_ms), static_cast<uint64_t>(steps), drag_button);
+                std::cout << "Drag delivered in background: " << request.dump() << '\n';
+            }
         }
     }
     co_return 0;

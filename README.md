@@ -27,19 +27,21 @@ cmake --build build
 ./build/cua-shot --app Arknights --click --x 2464 --y 1960
 ```
 
-后台拖拽使用窗口截图左上角的像素坐标。程序会在同一张截图上校验起点和终点，
-然后按 `mouseMoved -> mouseDown -> mouseDragged* -> mouseUp` 顺序把事件发送到目标 PID，
-窗口不需要切到前台：
+> `--drag` 这个后台拖拽对于 Finder 这样的 AppKit App 可以生效，但是对于 Arknights 不能生效。
+
+实验性的合成手势入口在主程序中，从零创建连续 ScrollWheel 与类型 29 的 Gesture
+事件序列，不需要录制文件或实时触控板输入。坐标仍使用窗口截图像素；先用
+`--dry-run` 核对目标和坐标，再观察实际运行是否让 App 响应：
 
 ```sh
-./build/cua-shot --app Arknights --drag \
-  --from-x 1200 --from-y 900 --to-x 2200 --to-y 900 \
-  --duration-ms 700 --steps 28
+# 打开干员页面，运行下面的指令（可以后台）
+# 如果你的分辨率比较小，就调整一下数值
+./build/cua-shot --app Arknights --gesture \
+  --from-x 2200 --from-y 900 --to-x 1200 --to-y 900
 ```
 
-`--button left|right|middle` 可选择按钮，`--dry-run` 只截图并校验坐标而不发送事件。
-拖拽默认使用后台投递；坐标来自截图 PNG，Retina 缩放和窗口屏幕位置由 CUA 返回的
-`window_bounds`/`screenshot_scale` 自动换算。
+`--gesture` 要求每步至少 8 毫秒，例如 33 步需 `--duration-ms 264` 或更长；过短的序列
+曾在 Arknights 中表现为一次点击，而非滑动。
 
 可以将明日方舟窗口放在后台尝试点击（注意，请不要隐藏窗口、最小化窗口、或放在台前调度的后台）
 
@@ -78,6 +80,18 @@ CG/SkyLight live-relay real trackpad scroll + gesture
         ↓
 Touch Alternatives Sample ✅
 Arknights ✅
+
+
+CG/SkyLight recorded scroll + gesture replay
+        ↓
+Touch Alternatives Sample ✅
+Arknights ✅
+
+
+CG/SkyLight synthesized scroll + gesture
+        ↓
+Touch Alternatives Sample 待验证
+Arknights 待验证
 
 
 真实 Trackpad
