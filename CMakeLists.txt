@@ -12,6 +12,12 @@ set_target_properties(cua_sdk PROPERTIES
   IMPORTED_LOCATION "${CUA_SDK_ROOT}/lib/libcua_driver_sdk.dylib"
   INTERFACE_INCLUDE_DIRECTORIES "${CUA_SDK_ROOT}/include")
 add_executable(cua-shot src/main.cpp)
+add_executable(live-relay scripts/live_relay.cpp)
+target_compile_features(live-relay PRIVATE cxx_std_20)
+set_target_properties(live-relay PROPERTIES CXX_EXTENSIONS OFF)
+target_link_libraries(live-relay PRIVATE
+  "-framework ApplicationServices" "-framework CoreFoundation")
+target_compile_options(live-relay PRIVATE -Wall -Wextra -Wpedantic)
 target_include_directories(cua-shot SYSTEM PRIVATE "${ASIO_INCLUDE_DIR}")
 target_compile_definitions(cua-shot PRIVATE ASIO_STANDALONE)
 target_compile_features(cua-shot PRIVATE cxx_std_20)
