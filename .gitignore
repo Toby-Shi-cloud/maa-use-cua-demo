@@ -19,6 +19,11 @@
 .DS_Store
 ._*
 
+# Python
+__pycache__
+*.pyc
+*.pyd
+
 # Editor temporary files
 *.swp
 *.swo
