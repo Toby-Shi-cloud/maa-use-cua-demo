@@ -106,3 +106,13 @@ CGEvent 没有的附加数据；目前的成功说明这些差异没有阻止所
 `cua-shot --gesture-click --x X --y Y` 使用与合成滑动相同的窗口路由和截图像素坐标，
 只发送一个极小位移的 ScrollWheel + Gesture 开始／结束序列，默认保持 80 毫秒。
 它不调用 CUA 的 `click`，也不依赖录制文件；`--dry-run` 只验证窗口和坐标。
+
+## ScrollWheel 必要性对照
+
+已有实验中，单独转发 ScrollWheel 失败，ScrollWheel + Gesture 转发和合成输入成功。
+在进行只发 Gesture 的对照实验时，未产生预期操作。实验仅省略
+ScrollWheel，保留 Gesture 的 subtype、阶段、位移与步间时序。这表明当前目标和生成序列
+仍需要 ScrollWheel 参与；不能据此推断所有 iPad App 或系统版本的输入要求。
+
+sample 的调用栈显示 `UINSGameModuleScrollDrag scrollWheel:` 会处理真实触控板输入，
+当前 `cua-shot` 不提供 `--gesture-only`，仍使用 ScrollWheel + Gesture。
