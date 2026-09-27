@@ -116,3 +116,100 @@ ScrollWheel，保留 Gesture 的 subtype、阶段、位移与步间时序。这�
 
 sample 的调用栈显示 `UINSGameModuleScrollDrag scrollWheel:` 会处理真实触控板输入，
 当前 `cua-shot` 不提供 `--gesture-only`，仍使用 ScrollWheel + Gesture。
+
+
+## Option / Trackpad Capture 实验结论（已归档）
+
+本轮 Option replay 实验代码、测试和 LLDB 跟踪脚本已移入 Git stash；下文保留脱敏后的
+机制分析和实验结论，不代表当前工作区提供这些实验参数。未包含用户目录、真实 PID、
+窗口 ID、设备 SenderID、内存地址或原始触点轨迹。原始录制、截图和调试输出不纳入此文档。
+
+### 最终结果与适用范围
+
+- 已确认：显式 Option 状态切换、恢复设备字段后，跨进程重放可在 Apple
+  Touch Alternatives Sample **前台**移动小球。
+- 已确认：**切到后台立即失去捕获**，小球随即回到中间。因此前台捕获后切后台
+  也无法维持当前方案。回中的具体机制未确认，不能直接认定为点击、取消或框架自动复位。
+- 当前依赖 Option 捕获的实现不适合作为持续后台控制方案，因此暂停这一实现方向。
+  这不证明所有后台触点注入都不可能；已有普通 ScrollWheel + Gesture 的后台结果仍有效。
+- 无实体触控板、任意设备 ID、虚拟设备、跨设备/重启后的录制，以及最终位移精度均未验证。
+
+### 已确认的输入路径
+
+普通双指滚动使用 `UINSGameModuleScrollDrag`；按住 Option 使用独立的
+`UINSGameModuleTrackpadCapture`。LLDB 实际命中的入口链为：
+
+```
+NSApplication sendEvent:
+  NSWindow sendEvent:
+    UINSInputView flagsChanged:
+      UINSGameEventTranslator flagsChanged:
+        UINSGameModuleTrackpadCapture flagsChanged:
+```
+
+本机反汇编和 selector 解析显示（私有实现，非跨版本 API 保证）：
+
+- `flagsChanged:` 检查 Option 位，调用 `_debouncedCaptureTrackpad` 或 `_releaseTrackpad`。
+- `_captureTrackpad` 请求独占输入模块、取消既有输入、设置触摸类型，并隐藏/移动光标，
+  调用 `SLAssociateMouseAndMouseCursorPosition` 与 `SLWarpMouseCursorPosition`。
+- 触点入口是 `touchesBegan/Moved/Ended/CancelledWithEvent:`，随后进入
+  `_handleTouchEvent:cancel:`。
+- 转换支持 indirect IOHID digitizer 和 synthetic NSTouch 两条分支；真实 Option 单指
+  操作命中了前者，未命中后者。
+
+一次真实操作的累计断点计数如下。计数包含跟踪启用后的收尾事件，并非逐事件时间线，
+不能将额外一次转换擅自归因于特定操作。Xcode 未显示预期的自动继续断点输出，证据来自
+暂停后读取的 `breakpoint list -v`。
+
+| 入口 | 命中次数 |
+| --- | ---: |
+| `flagsChanged:` | 3 |
+| `_debouncedCaptureTrackpad` / `_captureTrackpad` | 1 / 1 |
+| `touchesBeganWithEvent:` / `touchesMovedWithEvent:` / `touchesEndedWithEvent:` | 1 / 97 / 1 |
+| `touchesCancelledWithEvent:` | 0 |
+| `_handleTouchEvent:cancel:` | 100 |
+| `_createDirectDigitizerIOHIDEventFromIndirectEvent:` | 100 |
+| `_createDirectDigitizerEventFromSyntheticTouches:` | 0 |
+| `_releaseTrackpad` | 2 |
+
+### 重放所需信息及修复
+
+仅给 ScrollWheel/Gesture 添加 Option modifier flags 不等于开始捕获。
+实验版改为向相同目标发送左 Option 的 `flagsChanged`（keycode 58），等待捕获，重放，
+再发送释放；使用原始事件间隔，并处理异常、SIGINT/SIGTERM 下的释放尝试。
+这不是全局硬件按键，崩溃或 SIGKILL 时也不保证清理。
+
+**更正早期推断：CGEvent 录制中确实可能保留 IOHID payload。** 两份本机录制解码后，
+分别有 167/167、290/290 个事件带 digitizer；检查还发现 Finger 子事件、变化坐标和
+抬起状态。不能仅凭录制器筛选了 ScrollWheel/Gesture 就认定触点数据缺失。
+
+但 payload 存在不代表 AppKit 可以生成触点：所测录制的 CGEvent 私有字段 **87** 为零。
+`_initMTTouchesFromIOHidEvent:` 用该字段查询设备 registry ID，再找到 touch device。
+实验版仅在字段缺失且带 digitizer 时，从 `IOHIDEventGetSenderID` 恢复字段 87。
+
+- 离线对照：恢复前 `allTouches` 为空；恢复后可生成 Began/Moved/Ended。
+- 目标进程单步：恢复后实际读到 Began 触点，关联视图为 `UINSInputView`。
+- 用户最终验证：新版本前台可移动小球。该验证未单独隔离字段 87 的因果作用。
+- 早期自动对照只 Raise 窗口，没有确认应用激活和 key-window，不能作为前台失败证据。
+  单步调试也会改变时序，不能代替完整重放测试。
+
+恢复现有设备编号不等于创建虚拟设备。任意编号是否可用未经验证；当前解码路径会查找
+设备对象，因此不能承诺无触控板环境可用。IOHID 旧时间戳虽存在，目标 NSTouch 使用了
+更新后的 CGEvent 时间；没有证据表明旧 IOHID 时间是本次失败原因，未据此修改它。
+
+### 坐标映射与可复用发现
+
+indirect 转换复制 IOHID 事件，遍历 type 11 子事件，读取字段 `0xb0000`、`0xb0001`，
+分别乘以 `convertSizeToScene:` 返回的场景宽、高，再写回副本。
+synthetic 分支读取 `phase`、`_index`、`normalizedPosition` 并构建 digitizer finger。
+这说明转换中的坐标缩放是乘法，但不证明最终 UIPan 位移没有识别阈值或其他处理。
+
+本机符号探测发现：`CGEventCopyIOHIDEvent`、`IOHIDEventCreateDigitizerEvent`、
+`IOHIDEventCreateDigitizerFingerEvent`、`IOHIDEventCreateData`、`IOHIDEventCreateWithData`；
+未找到 `CGEventSetIOHIDEvent`。AppKit 有 `+[NSEvent _eventWithTouches:]`、
+`-[NSEvent _setTouches:]`。符号存在仅表示可继续研究，不等于注入功能已验证。
+
+实验版构建及两项自动测试通过，覆盖录制解码、Option 首尾顺序、目标字段、中断释放和
+普通 replay 不增加 Option 事件；投递使用内存替身，不等于窗口操作测试。
+若未来继续，优先研究无需前台捕获的触点分发，或校准已有后台 gesture+scroll 的位移；
+不再单纯调大 Option 捕获等待时间。
