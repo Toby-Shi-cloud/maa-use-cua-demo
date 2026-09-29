@@ -1,6 +1,6 @@
 ## MAA Use cua Demo
 
-我正在尝试 cua 能否正常后台点击从 App Store 下载的 Arknights。
+尝试后台点击从 App Store 下载的 Arknights。
 
 ## 快速测试
 
@@ -12,19 +12,13 @@ cmake -S . -B build
 cmake --build build
 ```
 
-离线检查录制格式与合成 Gesture 事件（不会操作目标 App）：
-
-```sh
-ctest --test-dir build --output-on-failure
-```
-
-尝试截屏，第一次使用的时候可能会失败（会提示需要权限）。由于这是个 cli，所以需要启动这个 cli 的父进程有权限（如 Terminal.app 或者 VSCode.app）。(截图权限叫做「录屏与系统录音」)
+尝试截屏，第一次使用的时候可能会失败（会提示需要权限）。启动本 cli 的终端需要「录屏与系统录音」权限。
 
 ```sh
 ./build/cua-shot --app Arknights --output ./screenshots/arknights.png
 ```
 
-尝试点击，第一次使用的时候可能会失败（会提示需要权限）。由于这是个 cli，所以需要启动这个 cli 的父进程有权限（如 Terminal.app 或者 VSCode.app）。（辅助操作的权限是「设备控制和数据访问」）
+尝试点击，第一次使用的时候可能会失败（会提示需要权限）。启动本 cli 的终端需要「设备控制和数据访问」权限。
 
 ```sh
 # 尝试从主界面点击「任务」
@@ -33,101 +27,32 @@ ctest --test-dir build --output-on-failure
 ./build/cua-shot --app Arknights --click --x 2464 --y 1960
 ```
 
-> `--drag` 这个后台拖拽对于 Finder 这样的 AppKit App 可以生效，但是对于 Arknights 不能生效。
+## 干员列表拖动：Gesture + ScrollWheel
 
-实验性的合成手势入口在主程序中，从零创建连续 ScrollWheel 与类型 29 的 Gesture
-事件序列，不需要录制文件或实时触控板输入。坐标仍使用窗口截图像素；先用
-`--dry-run` 核对目标和坐标，再观察实际运行是否让 App 响应：
+合成手势使用窗口截图像素坐标，不需要录制文件或实时触控板输入。
+先打开干员页面，再按当前截图调整起终点；可以加 `--dry-run` 先核对命令，
+正式发送时去掉它：
 
 ```sh
 # 打开干员页面，运行下面的指令（可以后台）
 # 如果你的分辨率比较小，就调整一下数值
-./build/cua-shot --app Arknights --gesture \
+CUA_GESTURE_GATE=step ./build/cua-shot --app Arknights --gesture \
   --from-x 2200 --from-y 900 --to-x 1200 --to-y 900
 ```
 
-`--gesture` 要求每步至少 8 毫秒，例如 33 步需 `--duration-ms 264` 或更长；过短的序列
-曾在 Arknights 中表现为一次点击，而非滑动。
+`CUA_GESTURE_GATE=step` 是一种输入端配对方案，合法的手势需要同时有 Gesture 和 ScrollWheel 事件，并且两者有严格的时序和时间间隔要求。
+由于 Mac 没有提供可用的批量投递 api，所以我们被迫采用了先向程序发送 SIGSTOP 暂停，然后发送单步的全部事件，再发送 SIGCONT 继续的做法保证时序和时差。
+不使用这个宏在绝大多数普通场景中也没有影响。但是对于干员部署这种高精度要求的场景，则必须要开启才能提高部署成功概率。
 
-`--gesture-click` 是独立的手势点击实验入口。它发送一个极小位移的 ScrollWheel + Gesture
-开始／结束序列，不调用 CUA 的鼠标点击；`--x/--y` 仍是截图像素，默认保持 80 毫秒：
+## 实验记录和其他用法
 
-```sh
-./build/cua-shot --app Arknights --gesture-click --x 2464 --y 1960 --dry-run
-./build/cua-shot --app Arknights --gesture-click --x 2464 --y 1960
-```
+完整的可复现实验命令、输入端实现限制及接收端证据见
+[`scripts/sample-trace/README.md`](scripts/sample-trace/README.md)；
+Arknights 试放见 [`scripts/arknights_gesture.md`](scripts/arknights_gesture.md)。
+当前开关仍是诊断性质：发送进程若被强制终止，目标进程可能保持暂停，
+需要向目标 PID 发送 SIGCONT。
 
-可以将明日方舟窗口放在后台尝试点击（注意，请不要隐藏窗口、最小化窗口、或放在台前调度的后台）
-
-我的测试环境：
-```
-Mac mini (M6)
-macOS 27.0
-```
-
-## 其他
-
-[README_chatgpt.md](README_chatgpt.md) 是 ChatGPT 写的详细的使用方案。
-
-## 实验现状
-
-```
-CG/SkyLight background click
-        ↓
-Arknights ✅
-
-
-CG/SkyLight background mouse drag
-        ↓
-Finder ✅
-Arknights ❌
-
-
-CG/SkyLight live-relay real trackpad scroll
-        ↓
-Finder ✅
-Touch Alternatives Sample ❌
-Arknights ❌
-
-
-CG/SkyLight live-relay real trackpad scroll + gesture
-        ↓
-Touch Alternatives Sample ✅
-Arknights ✅
-
-
-CG/SkyLight recorded scroll + gesture replay
-        ↓
-Touch Alternatives Sample ✅
-Arknights ✅
-
-
-CG/SkyLight synthesized scroll + gesture
-        ↓
-Arknights 后台水平／竖直位移 ✅
-
-
-CG/SkyLight synthesized gesture click
-        ↓
-Arknights ✅
-
-
-真实 Trackpad
-pointer 在后台 Arknights 上
-        ↓
-Arknights ✅
-
-
-foreground CUA mouse drag
-        ↓
-抢 cursor
-        ↓
-Arknights ✅
-
-
-Karabiner Virtual HID Mouse
-        ↓
-真正 HID dx/dy
-        ↓
-抢 cursor ✅
-```
+其它输入方式的历史状态见 [`scripts/input_methods.md`](scripts/input_methods.md)；
+步数、缓动、停留及旧版距离校准见
+[`scripts/gesture_distance.md`](scripts/gesture_distance.md)。
+[README_chatgpt.md](README_chatgpt.md) 保留较早的详细使用记录。
