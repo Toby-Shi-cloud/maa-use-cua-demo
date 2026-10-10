@@ -1,58 +1,70 @@
-## MAA Use cua Demo
+# 本地 MaaFramework macOS 测试
 
-尝试后台点击从 App Store 下载的 Arknights。
+本分支的 cua-shot 通过公开 C API 调用本地已安装的 MaaFramework。
+截图使用 ScreenCaptureKit，输入可选 PostToPid（后台）或 GlobalEvent（前台）。
+不链接 Cua SDK，不调用旧的 macos_drag / macos_gesture 实现。
+旧源码和实验记录保留作参考，不参与当前构建。
 
-## 快速测试
+## 构建
 
-首先编译项目
+需要 CMake 3.20+、Xcode Command Line Tools 和已经编译安装的 MaaFramework。
+运行要求 macOS 14+。
 
-```sh
-brew install cmake nlohmann-json asio
-cmake -S . -B build
-cmake --build build
-```
+~~~sh
+cmake -S . -B build-maafw --fresh -DCMAKE_BUILD_TYPE=RelWithDebInfo \
+  -DMaaFramework_DIR="<path-to-maaframework>/install/share/cmake/MaaFramework" \
+  -DCMAKE_PREFIX_PATH="<path-to-maaframework>/source/MaaUtils/MaaDeps/vcpkg/installed/maa-arm64-osx"
+cmake --build build-maafw -j 4
+ctest --test-dir build-maafw --output-on-failure
+~~~
 
-尝试截屏，第一次使用的时候可能会失败（会提示需要权限）。启动本 cli 的终端需要「录屏与系统录音」权限。
+CMake 使用 find_package(MaaFramework CONFIG REQUIRED)，链接 MaaFramework::MaaFramework。
+trycua 不编译 MaaFramework 源码，也不需要单独查找 OpenCV、Boost 或 meojson。
+修改 MaaFramework 后在它的仓库重新编译、安装；trycua 使用 install 中的动态库。
+保留 install/bin 中的配套库，框架会从该目录加载 macOS ControlUnit。
+这是本地开发构建，不是可分发安装包。--fresh 需要 CMake 3.24+；
+使用较旧 CMake 时请换一个空构建目录并省略 --fresh。
 
-```sh
-./build/cua-shot --app Arknights --output ./screenshots/arknights.png
-```
+## 先截图确定坐标
 
-尝试点击，第一次使用的时候可能会失败（会提示需要权限）。启动本 cli 的终端需要「设备控制和数据访问」权限。
+~~~sh
+./build-maafw/cua-shot --check-permissions
+./build-maafw/cua-shot --list --app Arknights
+./build-maafw/cua-shot --app Arknights --output screenshots/maafw.png
+~~~
 
-```sh
-# 尝试从主界面点击「任务」
-# 这里坐标需要换算，我本地的明日方舟窗口大小是 3942x2280
-# 如果你的窗口大小是 (X, Y)，尝试点击 (0.625X, 0.86Y) 这样的位置
-./build/cua-shot --app Arknights --click --x 2464 --y 1960
-```
+终端需要录屏权限；实际发送输入还需辅助功能权限。权限检查只读，不主动弹窗。
+多个窗口匹配时，用 --window-id 或 --title 缩小范围。
 
-## 干员列表拖动：Gesture + ScrollWheel
+坐标基于本分支生成的截图，不能直接复用旧 Cua 的 Retina 截图坐标。
+控制单元按窗口 points 设置截图输出尺寸，通常与旧图不同。
+不裁剪标题栏，不强制 16:9。
+如果使用 --max-dimension，输入命令也要使用相同值；程序将缩图坐标映射回原图。
+每次运行会显示窗口 ID、库版本、截图尺寸和转换后的输入坐标。
 
-合成手势使用窗口截图像素坐标，不需要录制文件或实时触控板输入。
-先打开干员页面，再按当前截图调整起终点；可以加 `--dry-run` 先核对命令，
-正式发送时去掉它：
+## 点击和拖动
 
-```sh
-# 打开干员页面，运行下面的指令（可以后台）
-# 如果你的分辨率比较小，就调整一下数值
-CUA_GESTURE_GATE=step ./build/cua-shot --app Arknights --gesture \
-  --from-x 2200 --from-y 900 --to-x 1200 --to-y 900
-```
+以下是语法示例；先根据截图调整坐标。--dry-run 只截图和校验，不发送输入。
 
-`CUA_GESTURE_GATE=step` 是一种输入端配对方案，合法的手势需要同时有 Gesture 和 ScrollWheel 事件，并且两者有严格的时序和时间间隔要求。
-由于 Mac 没有提供可用的批量投递 api，所以我们被迫采用了先向程序发送 SIGSTOP 暂停，然后发送单步的全部事件，再发送 SIGCONT 继续的做法保证时序和时差。
-不使用这个宏在绝大多数普通场景中也没有影响。但是对于干员部署这种高精度要求的场景，则必须要开启才能提高部署成功概率。
+~~~sh
+./build-maafw/cua-shot --app Arknights --click --x 500 --y 400 \
+  --delivery background --dry-run
 
-## 实验记录和其他用法
+./build-maafw/cua-shot --app Arknights --drag \
+  --from-x 900 --from-y 400 --to-x 500 --to-y 400 \
+  --duration-ms 500 --delivery background --dry-run
+~~~
 
-完整的可复现实验命令、输入端实现限制及接收端证据见
-[`scripts/sample-trace/README.md`](scripts/sample-trace/README.md)；
-Arknights 试放见 [`scripts/arknights_gesture.md`](scripts/arknights_gesture.md)。
-当前开关仍是诊断性质：发送进程若被强制终止，目标进程可能保持暂停，
-需要向目标 PID 发送 SIGCONT。
+去掉 --dry-run 才实际发送。用相同坐标分别测试：
 
-其它输入方式的历史状态见 [`scripts/input_methods.md`](scripts/input_methods.md)；
-步数、缓动、停留及旧版距离校准见
-[`scripts/gesture_distance.md`](scripts/gesture_distance.md)。
-[README_chatgpt.md](README_chatgpt.md) 保留较早的详细使用记录。
+- --delivery background：MaaFramework PostToPid。
+- --delivery foreground：MaaFramework GlobalEvent，会激活应用并使用真实鼠标，抬起后恢复光标位置。
+
+点击和拖动调用 MaaControllerPostClickV2 / MaaControllerPostSwipeV2，插值及底层事件调度由框架负责。\n--steps 不再支持，请使用 --duration-ms 调整时长。
+contact 对应鼠标左/右/中键，不是真实多指触控。--button 可选 left/right/middle。
+--count 2 发送两次点击，不保证目标应用将其识别为系统双击。
+--output 保存的是输入前截图；发送成功只表示接口返回成功，请再次截图确认游戏响应。
+--gesture、--gesture-click 和全部 --gesture-* 参数均报错；CUA_GESTURE_* 环境变量不参与执行。
+
+旧的 scripts/test_10x.sh 等实验脚本未迁移到此后端，不能作为本分支测试入口。
+离线检查覆盖 CLI 帮助和无效参数拒绝；游戏实际响应需手动验证。
