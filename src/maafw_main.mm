@@ -17,8 +17,22 @@
 #include <vector>
 
 namespace fs = std::filesystem;
+
+MaaStatus wait_controller(MaaController *ctrl, MaaCtrlId id) {
+  // AppKit refreshes NSRunningApplication state on the main run loop.
+  // Keep it running while MaaFramework performs the operation on its worker.
+  for (;;) {
+    const auto status = MaaControllerStatus(ctrl, id);
+    if (status != MaaStatus_Pending && status != MaaStatus_Running)
+      return status;
+    if (CFRunLoopRunInMode(kCFRunLoopDefaultMode, 0.01, false) ==
+        kCFRunLoopRunFinished)
+      std::this_thread::sleep_for(std::chrono::milliseconds(10));
+  }
+}
 struct Options {
   std::string app, title, output, delivery = "background", button = "left";
+  std::optional<std::string> start_game, stop_game;
   uint32_t window = 0;
   int pid = 0, max_dimension = 0, duration = 500, count = 1;
   std::optional<double> x, y, fx, fy, tx, ty;
@@ -121,6 +135,8 @@ int run(int argc, char **argv) {
       std::cout
           << "Installed MaaFramework C API runner (no Cua or synthetic "
              "gestures)\n"
+             "cua-shot --start-game PATH.app [--dry-run]\n"
+             "cua-shot --stop-game PATH.app [--dry-run]\n"
              "cua-shot --list [--app NAME] [--all]\n"
              "cua-shot --app NAME --output image.png [--max-dimension N]\n"
              "cua-shot --app NAME --click --x X --y Y [--delivery "
@@ -165,6 +181,15 @@ int run(int argc, char **argv) {
     }
     if (arg == "--dry-run") {
       o.dry = true;
+      continue;
+    }
+    if (arg == "--start-game" || arg == "--stop-game") {
+      if (++i == argc || !argv[i][0] || std::string(argv[i]).starts_with("--"))
+        throw std::runtime_error("Missing .app path for " + arg);
+      auto &target = arg == "--start-game" ? o.start_game : o.stop_game;
+      if (target)
+        throw std::runtime_error("Duplicate lifecycle action");
+      target = argv[i];
       continue;
     }
     if (arg == "--steps")
@@ -221,6 +246,52 @@ int run(int argc, char **argv) {
       else if (arg == "--to-y")
         o.ty = coordinate(v);
     }
+  }
+  const bool lifecycle = o.start_game.has_value() || o.stop_game.has_value();
+  if (lifecycle) {
+    if (o.start_game && o.stop_game)
+      throw std::runtime_error("Choose either --start-game or --stop-game");
+    if (o.click || o.drag || o.list || o.permissions || input_option ||
+        !o.app.empty() || !o.title.empty() || o.window || o.pid || o.all ||
+        !o.output.empty() || o.max_dimension)
+      throw std::runtime_error(
+          "Game lifecycle actions accept only a .app path and --dry-run");
+    const auto path =
+        fs::absolute(fs::path(o.start_game ? *o.start_game : *o.stop_game))
+            .lexically_normal();
+    if (path.extension() != ".app" || !fs::is_directory(path))
+      throw std::runtime_error("Expected an existing .app directory");
+    const std::string intent = path.string();
+    NSBundle *bundle = [NSBundle
+        bundleWithPath:[NSString stringWithUTF8String:intent.c_str()]];
+    if (!bundle || !bundle.bundleIdentifier)
+      throw std::runtime_error("Application bundle has no Bundle ID");
+    std::cout << (o.start_game ? "start_game" : "stop_game")
+              << " path=" << intent
+              << " bundle_id=" << bundle.bundleIdentifier.UTF8String << '\n';
+    if (o.dry) {
+      std::cout << "dry_run: no application started or stopped\n";
+      return 0;
+    }
+    std::unique_ptr<MaaController, decltype(&MaaControllerDestroy)> controller(
+        MaaMacOSControllerCreate(0, MaaMacOSScreencapMethod_None,
+                                 MaaMacOSInputMethod_None),
+        MaaControllerDestroy);
+    if (!controller)
+      throw std::runtime_error("MaaFramework controller creation failed");
+    auto *ctrl = controller.get();
+    if (wait_controller(ctrl, MaaControllerPostConnection(ctrl)) !=
+        MaaStatus_Succeeded)
+      throw std::runtime_error("MaaFramework connection failed");
+    const auto id = o.start_game
+                        ? MaaControllerPostStartApp(ctrl, intent.c_str())
+                        : MaaControllerPostStopApp(ctrl, intent.c_str());
+    if (wait_controller(ctrl, id) != MaaStatus_Succeeded)
+      throw std::runtime_error("MaaFramework game lifecycle operation failed; "
+                               "check installed library and logs");
+    std::cout << (o.start_game ? "Application launch succeeded.\n"
+                               : "Application stop succeeded.\n");
+    return 0;
   }
   const bool input = o.click || o.drag;
   if (int(o.click) + int(o.drag) + int(o.list) + int(o.permissions) > 1)
@@ -283,7 +354,7 @@ int run(int argc, char **argv) {
     throw std::runtime_error("MaaFramework controller creation failed");
   auto *ctrl = controller.get();
   auto wait = [&](MaaCtrlId id) {
-    if (MaaControllerWait(ctrl, id) != MaaStatus_Succeeded)
+    if (wait_controller(ctrl, id) != MaaStatus_Succeeded)
       throw std::runtime_error("MaaFramework controller operation failed");
   };
   bool raw_size = true;

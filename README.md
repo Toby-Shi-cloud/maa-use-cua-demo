@@ -68,3 +68,20 @@ contact 对应鼠标左/右/中键，不是真实多指触控。--button 可选 
 
 旧的 scripts/test_10x.sh 等实验脚本未迁移到此后端，不能作为本分支测试入口。
 离线检查覆盖 CLI 帮助和无效参数拒绝；游戏实际响应需手动验证。
+
+## 启动和停止游戏
+
+先在 MaaFramework 仓库编译并安装包含 macOS 启停实现的版本。
+两种操作都接收应用的 .app 路径，不是应用显示名或 Bundle ID。
+
+~~~sh
+./build-maafw/cua-shot --start-game "<path-to-game>/Arknights.app" --dry-run
+./build-maafw/cua-shot --start-game "<path-to-game>/Arknights.app"
+./build-maafw/cua-shot --stop-game "<path-to-game>/Arknights.app"
+~~~
+
+相对路径会转换为绝对路径；路径包含空格时请加引号。
+dry-run 仅检查应用包并显示路径及 Bundle ID，不执行启停。
+启停不要求已有可见窗口，不截图，不需要录屏权限，也不接受 --app 等窗口筛选参数。
+停止由 MaaFramework 读取 Bundle ID，再向匹配进程发送 Command-Q；运行中的目标需要辅助功能权限。
+不存在匹配的运行进程时，框架返回停止成功。命令等待框架返回结果，以退出码报告成功或失败。
