@@ -403,3 +403,89 @@ CUA_GESTURE_PRIME=1 CUA_GESTURE_PAN_PRIME=15 \
 本地证据：`build/gated-step-*.csv`、`build/gated-base-*.csv`、
 `build/gated_probe.py`、接收端 JSONL 和对应截图。10 次是本机、此 Sample、
 此参数下的重复性证据，不能直接推出游戏中任意起终点都可重复。
+
+## 明日方舟部署长度对照（2026-09-30）
+
+将诊断版 TouchAlternativesSample 窗口调到截图 3946×2276 px，接近当时游戏
+截图的 3942×2280 px。每次先用 `--gesture-click --x 1973 --y 1138` 复位，
+截图测得小球中心 `(1973.002,1169.995)`。实验只发送 MAA 桃金娘部署的第一段；
+朝向段是独立滑动，不计入这里的位移。MAA 的归一化部署点换算到游戏截图是
+`(545,2089)→(2904,556)`，输入差 `(2359,-1533)`，用 365ms、约36步、
+`p(t)=2t−t²`。`cua-shot` 增加 `--gesture-easing ease-out-quad` 以匹配这个插值。
+
+```sh
+CUA_GESTURE_GATE=step ./build/cua-shot --app TouchAlternativesSample --gesture \
+  --from-x 545 --from-y 2089 --to-x 2904 --to-y 556 \
+  --steps 36 --duration-ms 365 --gesture-easing ease-out-quad
+```
+
+| 条件 | 小球水平位移（px） | 重复性 |
+| --- | ---: | --- |
+| 原样缓出，365ms/36步 | 常见约 +1615；另有 +1525 | 4 次复测中 3 次同级，1 次偏短 |
+| 原样匀速，365ms/36步 | 常见约 +1615；另有 +1564 | 4 次中 3 次同级，1 次偏短 |
+| 缓出，半程输入 `(1179,-767)` | +807～809 | 3 次接近一致 |
+| 缓出，四分之一程输入 `(590,-383)` | +380～381 | 2 次接近一致 |
+| 缓出，末尾等待40ms，365ms/36步 | +1435～1620 | 6 次明显分散 |
+| 缓出，预备 changed，365ms/26步 | 常见 +1794；另有 +1712 | 6 次中 5 次相同 |
+| 匀速，同样预备，365ms/26步 | 常见 +1794；另有 +1725 | 6 次中 4 次相同 |
+
+预备组使用 `CUA_GESTURE_PRELUDE=changed CUA_GESTURE_PRIME=1
+CUA_GESTURE_PAN_PRIME=15`，并加 `--gesture-start-hold-ms 100
+--gesture-end-hold-ms 40`。为满足每步至少8ms的发送约束，步数由36降到26。
+原样组的小球垂直位移通常约 −1050px；预备组接近顶部，小球部分被截图裁切，
+所以预备组的截图垂直质心不能当作真实垂直位移。水平质心未裁切。
+
+接收端日志显示：原样组偏短时，`touch.ended` 可达到与正常轮次相同的终点，
+但最后一次 `pan.changed` 停在更早的位置；`pan.ended` 不再更新小球。
+预备组把 `pan.began` 起点固定了，偏短轮次的 `touch.ended` 本身却少了一段
+位移。单纯把 40ms 留在尾部不能修复，还会加大开头每步位移，导致 pan 建立
+更晚。当前只能证明在此 Sample、这些输入下有上述现象；不能将 5/6 或 4/6
+视为稳定部署方案。图像和逐轮 JSONL 保存在本机 `build/sample-maa-study/`。
+
+## 与真实录制的事件幅度对齐（2026-09-30）
+
+检查两个含 translation subtype6 的录制：
+
+| 录制 | 非零位移事件 | 非零位移时段 | 118/119累计 | 最大单步绝对值 |
+| --- | ---: | ---: | ---: | ---: |
+| `gesture.move.cgevents` | 74 | 约884ms | `(254,-265)` | `(11,13)` |
+| `gesture.T91.cgevents` | 75 | 约871ms | `(1570,-945)` | `(76,54)` |
+
+两者非零事件的中位间隔约10ms。当前 MAA 坐标差经屏幕scale=2换算后，生成器
+只给字段累计 `(1179.5,-766.5)`；36步、365ms缓出的最大单步约
+`(64.62,-41.99)`。因此它的累计幅度低于T91录制；但在录制的前365ms，
+T91累计仅 `(576,-416)`，不能说合成输入在每个时间窗都偏弱。T91录制耗时
+明显更长，以下实验只匹配字段总量或单步级别，**没有复制完整的真实时间序列**。
+
+新增实验参数 `--gesture-field-scale-x`、`--gesture-field-scale-y`（各自 `(0,4]`）。
+它们只缩放ScrollWheel和translation Gesture的位移字段，`from/to` 对应的
+事件位置不变。用 `(1.3310724883,1.2328767123)` 可将原始累计字段精确调到
+T91的 `(1570,-945)`，最大单步约 `(86.01,-51.77)`，已达到该录制的单步量级。
+
+为避免圆出界，测量前先复位并将圆从中心预置到左下方；每轮记录预置后的圆心，
+再计算本轮部署手势的相对位移。保持 `from/to=(545,2089)→(2904,556)`，
+365ms/36步缓出时，录制同总量倍率的3次位移均约 `(2155,-1297)` px。
+继续放大到统一1.46倍，8次中5次约 `(2363.5,-1535.9)` px，其余3次偏短。
+它证明了发送端可以提供足够幅度，但单独加大字段没有解决落点波动。
+
+将预备 changed、提前建立pan、字段倍率结合后，400ms/26步、统一1.315倍
+在20次中18次落在 `(2359.71～2359.76,-1533.51～-1533.43)` px，
+几乎等于MAA坐标差 `(2359,-1533)`；另2次分别约
+`(2202.66,-1431.45)` 和 `(2335.29,-1517.65)`。365ms同配置8次中5次
+达到目标，3次偏短。400ms明显改善了本组重复性，但18/20仍不能称可靠部署。
+
+```sh
+CUA_GESTURE_GATE=step CUA_GESTURE_PRELUDE=changed \
+CUA_GESTURE_PRIME=1 CUA_GESTURE_PAN_PRIME=15 \
+./build/cua-shot --app TouchAlternativesSample --gesture \
+  --from-x 545 --from-y 2089 --to-x 2904 --to-y 556 \
+  --steps 26 --duration-ms 400 --gesture-easing ease-out-quad \
+  --gesture-start-hold-ms 100 --gesture-end-hold-ms 40 \
+  --gesture-field-scale-x 1.315 --gesture-field-scale-y 1.315
+```
+
+接收端20轮的`pan.began`位置基本固定；偏短轮次之一的`touch.ended`也偏短，
+提示除了初始识别门槛，后续事件仍可能漏进虚拟触摸。这里的倍率只在当前Sample
+窗口、这条轨迹和这些时间参数中校准，尚未验证明日方舟部署格子与朝向手势。
+本机逐轮截图与JSONL位于`build/sample-record-scale-study/`；三个发送端轨迹分别
+为`build/sample-record-{original,level,scaled}-trace.csv`。

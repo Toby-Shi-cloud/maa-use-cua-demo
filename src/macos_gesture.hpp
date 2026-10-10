@@ -114,20 +114,28 @@ inline void send(CGEventRef event, const Route& route, pid_t pid, uint32_t windo
 
 // Generate a fresh ScrollWheel + Gesture sequence, with no recorded event as
 // a template. Mapping screen displacement to private fields is experimental.
-enum class Easing { linear, smoothstep };
+enum class Easing { linear, smoothstep, ease_out_quad };
 
 inline double progress(double t, Easing easing) {
-    return easing == Easing::smoothstep ? t * t * (3 - 2 * t) : t;
+    switch (easing) {
+    case Easing::linear: return t;
+    case Easing::smoothstep: return t * t * (3 - 2 * t);
+    case Easing::ease_out_quad: return t * (2 - t);
+    }
+    return t;
 }
 
 inline void swipe_with_route(const Route& route, pid_t pid, uint32_t window_id, double bounds_x, double bounds_y,
                   double screenshot_scale, double from_x, double from_y,
                   double to_x, double to_y, uint64_t duration_ms, uint64_t steps,
-                  Easing easing = Easing::linear, uint64_t end_hold_ms = 0, uint64_t start_hold_ms = 0) {
+                  Easing easing = Easing::linear, uint64_t end_hold_ms = 0, uint64_t start_hold_ms = 0,
+                  double field_scale_x = 1, double field_scale_y = 1) {
     if (pid <= 0 || window_id == 0 || !std::isfinite(screenshot_scale) ||
         screenshot_scale <= 0 || steps == 0 || steps > 200 || end_hold_ms > duration_ms ||
         start_hold_ms > duration_ms - end_hold_ms ||
-        duration_ms - end_hold_ms - start_hold_ms < steps * 8)
+        duration_ms - end_hold_ms - start_hold_ms < steps * 8 ||
+        !std::isfinite(field_scale_x) || !std::isfinite(field_scale_y) ||
+        field_scale_x <= 0 || field_scale_y <= 0 || field_scale_x > 4 || field_scale_y > 4)
         throw std::runtime_error("Invalid synthetic gesture parameters.");
     // Diagnostic-only prelude matrix; default path stays unchanged.
     const char* prelude_env = std::getenv("CUA_GESTURE_PRELUDE");
@@ -144,6 +152,14 @@ inline void swipe_with_route(const Route& route, pid_t pid, uint32_t window_id, 
     const std::string_view gate = gate_env ? gate_env : "";
     if (!gate.empty() && gate != "step")
         throw std::runtime_error("Diagnostic gate must be step.");
+    // SLEventPostToPid returns before the WindowServer delivery necessarily
+    // completes. Keep the receiver stopped briefly after posting as a control.
+    const char* post_hold_env = std::getenv("CUA_GESTURE_POST_HOLD_US");
+    char* post_hold_end = nullptr;
+    const unsigned long post_hold_us = post_hold_env ? std::strtoul(post_hold_env, &post_hold_end, 10) : 0;
+    if (post_hold_env && (gate != "step" || post_hold_end == post_hold_env ||
+        *post_hold_end || *post_hold_env == '-' || post_hold_us > 4000))
+        throw std::runtime_error("Diagnostic post hold requires step gate and 0..4000 microseconds.");
     const double dx = (to_x - from_x) / screenshot_scale;
     const double dy = (to_y - from_y) / screenshot_scale;
     const double distance = std::hypot(dx, dy);
@@ -173,6 +189,8 @@ inline void swipe_with_route(const Route& route, pid_t pid, uint32_t window_id, 
     if (trace_path) trace.reserve(steps + 4);
     const auto start = std::chrono::steady_clock::now();
     auto step = [&](uint64_t i, CGScrollPhase phase, double move_x, double move_y) {
+        const double field_x = move_x * field_scale_x;
+        const double field_y = move_y * field_scale_y;
         const double p = progress(static_cast<double>(i) / steps, easing);
         const double location_fraction = i == 0 ? 0 : seed_fraction + prime_fraction + pan_fraction + (1 - seed_fraction - prime_fraction - pan_fraction) * p;
         const CGPoint local = CGPointMake(
@@ -202,23 +220,25 @@ inline void swipe_with_route(const Route& route, pid_t pid, uint32_t window_id, 
         if (!order.empty()) {
             // Prepare all metadata before posting; posting itself is still not atomic.
             CGEventRef events[] = {
-                make_scroll(nullptr, static_cast<int32_t>(std::lround(move_x)),
-                            static_cast<int32_t>(std::lround(move_y)), phase),
+                make_scroll(nullptr, static_cast<int32_t>(std::lround(field_x)),
+                            static_cast<int32_t>(std::lround(field_y)), phase),
                 make_gesture(nullptr, false, phase, 0, 0),
-                make_gesture(nullptr, true, phase, move_x, move_y)
+                make_gesture(nullptr, true, phase, field_x, field_y)
             };
             for (auto event : events) prepare(event, route, pid, window_id, local, screen);
             for (char type : order) route.post(pid, events[type == 'S' ? 0 : type == 'G' ? 1 : 2]);
             for (auto event : events) CFRelease(event);
         } else {
-        send(make_scroll(nullptr, static_cast<int32_t>(std::lround(move_x)),
-                         static_cast<int32_t>(std::lround(move_y)), phase),
+        send(make_scroll(nullptr, static_cast<int32_t>(std::lround(field_x)),
+                         static_cast<int32_t>(std::lround(field_y)), phase),
              route, pid, window_id, local, screen);
         send(make_gesture(nullptr, false, phase, 0, 0), route, pid, window_id, local, screen);
-        send(make_gesture(nullptr, true, phase, move_x, move_y), route, pid, window_id, local, screen);
+        send(make_gesture(nullptr, true, phase, field_x, field_y), route, pid, window_id, local, screen);
         }
+        if (post_hold_us)
+            std::this_thread::sleep_for(std::chrono::microseconds(post_hold_us));
         stopped.resume();
-        if (trace_path) trace.push_back({i, before, timestamp_ns(), static_cast<int>(phase), move_x, move_y});
+        if (trace_path) trace.push_back({i, before, timestamp_ns(), static_cast<int>(phase), field_x, field_y});
     };
     // Send begin at from before moving. steps counts movement updates;
     // optional start hold uses a one-unit seed, deducted from later displacement.
@@ -272,9 +292,11 @@ inline void swipe_with_route(const Route& route, pid_t pid, uint32_t window_id, 
 inline void swipe(pid_t pid, uint32_t window_id, double bounds_x, double bounds_y,
                   double screenshot_scale, double from_x, double from_y,
                   double to_x, double to_y, uint64_t duration_ms, uint64_t steps,
-                  Easing easing = Easing::linear, uint64_t end_hold_ms = 0, uint64_t start_hold_ms = 0) {
+                  Easing easing = Easing::linear, uint64_t end_hold_ms = 0, uint64_t start_hold_ms = 0,
+                  double field_scale_x = 1, double field_scale_y = 1) {
     swipe_with_route(resolve_route(), pid, window_id, bounds_x, bounds_y,
-                     screenshot_scale, from_x, from_y, to_x, to_y, duration_ms, steps, easing, end_hold_ms, start_hold_ms);
+                     screenshot_scale, from_x, from_y, to_x, to_y, duration_ms, steps, easing,
+                     end_hold_ms, start_hold_ms, field_scale_x, field_scale_y);
 }
 
 // Experimental tap candidate. A one-point translation is enough to give the

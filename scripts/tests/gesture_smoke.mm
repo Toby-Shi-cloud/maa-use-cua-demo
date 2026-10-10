@@ -98,6 +98,35 @@ int main() {
     for (CGEventRef event : captured) CFRelease(event);
     captured.clear();
     macos_gesture::swipe_with_route(fake_route, 123, 456, 100, 200,
+        2, 40, 80, 100, 20, 40, 4, macos_gesture::Easing::ease_out_quad);
+    bool ease_out_ok = captured.size() == 18;
+    const double ease_out_expected[] = {0, 13.125, 9.375, 5.625, 1.875, 0};
+    if (ease_out_ok) {
+        for (size_t i = 0; i < 6; ++i) {
+            const auto dx = CGEventGetDoubleValueField(captured[i * 3 + 2],
+                macos_gesture::kGestureField118);
+            ease_out_ok &= std::abs(dx - ease_out_expected[i]) < 1e-9;
+        }
+        const auto end = CGEventGetLocation(captured.back());
+        ease_out_ok &= end.x == 150 && end.y == 210;
+    }
+    for (CGEventRef event : captured) CFRelease(event);
+    captured.clear();
+    macos_gesture::swipe_with_route(fake_route, 123, 456, 100, 200,
+        2, 40, 80, 100, 20, 40, 4, macos_gesture::Easing::linear, 0, 0, 2, 3);
+    bool field_scale_ok = captured.size() == 18;
+    if (field_scale_ok) {
+        double sx = 0, sy = 0;
+        for (size_t i = 0; i < 6; ++i) {
+            sx += CGEventGetDoubleValueField(captured[i * 3 + 2], macos_gesture::kGestureField118);
+            sy += CGEventGetDoubleValueField(captured[i * 3 + 2], macos_gesture::kGestureField119);
+        }
+        const CGPoint end = CGEventGetLocation(captured.back());
+        field_scale_ok = sx == 60 && sy == -90 && end.x == 150 && end.y == 210;
+    }
+    for (CGEventRef event : captured) CFRelease(event);
+    captured.clear();
+    macos_gesture::swipe_with_route(fake_route, 123, 456, 100, 200,
         2, 40, 80, 100, 20, 120, 4, macos_gesture::Easing::linear, 40, 40);
     bool seed_ok = captured.size() == 18;
     double seed_sum_x = 0, seed_sum_y = 0;
@@ -168,6 +197,26 @@ int main() {
         order_ok &= std::abs(total - 30) < 1e-5;
     }
     unsetenv("CUA_GESTURE_ORDER");
+    bool post_hold_validation_ok = true;
+    for (const char* value : {"-1", "4001", "bad", ""}) {
+        setenv("CUA_GESTURE_GATE", "step", 1);
+        setenv("CUA_GESTURE_POST_HOLD_US", value, 1);
+        bool rejected = false;
+        try {
+            macos_gesture::swipe_with_route(fake_route, 123, 456, 0, 0,
+                2, 40, 80, 100, 20, 32, 4);
+        } catch (const std::runtime_error&) { rejected = true; }
+        post_hold_validation_ok &= rejected;
+    }
+    unsetenv("CUA_GESTURE_GATE");
+    setenv("CUA_GESTURE_POST_HOLD_US", "1000", 1);
+    bool ungated_hold_rejected = false;
+    try {
+        macos_gesture::swipe_with_route(fake_route, 123, 456, 0, 0,
+            2, 40, 80, 100, 20, 32, 4);
+    } catch (const std::runtime_error&) { ungated_hold_rejected = true; }
+    unsetenv("CUA_GESTURE_POST_HOLD_US");
     return scroll_ok && gesture_ok && changed_ok && ended_ok && tap_ok && swipe_ok &&
-        easing_ok && seed_ok && invalid_hold_rejected && prelude_ok && order_ok ? 0 : 2;
+        easing_ok && ease_out_ok && field_scale_ok && seed_ok && invalid_hold_rejected && prelude_ok && order_ok &&
+        post_hold_validation_ok && ungated_hold_rejected ? 0 : 2;
 }

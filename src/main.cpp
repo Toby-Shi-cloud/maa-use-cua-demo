@@ -36,6 +36,15 @@ double coordinate(const std::string& text) {
     return value;
 }
 
+double field_scale(const std::string& text) {
+    double value = 0;
+    auto [end, ec] = std::from_chars(text.data(), text.data() + text.size(), value);
+    if (ec != std::errc{} || end != text.data() + text.size() || !std::isfinite(value) ||
+        value <= 0 || value > 4)
+        throw std::runtime_error("Expected a finite gesture field scale in (0,4]: " + text);
+    return value;
+}
+
 long long non_negative(const std::string& text) {
     long long value = 0;
     auto [end, ec] = std::from_chars(text.data(), text.data() + text.size(), value);
@@ -48,6 +57,7 @@ asio::awaitable<int> run(int argc, char** argv, std::unique_ptr<Driver>& runtime
     std::string app, title, output, button = "left", delivery = "background";
     std::string gesture_easing = "linear";
     long long gesture_end_hold_ms = 0, gesture_start_hold_ms = 0;
+    double gesture_field_scale_x = 1, gesture_field_scale_y = 1;
     bool gesture_profile_option = false;
     std::optional<double> x, y, from_x, from_y, to_x, to_y;
     long long count = 1, max_dimension = 0, duration_ms = 500, steps = 20;
@@ -74,7 +84,8 @@ asio::awaitable<int> run(int argc, char** argv, std::unique_ptr<Driver>& runtime
                          "  --to-x/--to-y     End point for --drag or --gesture\n"
                          "  --duration-ms N   Motion duration (default 500); gesture-click hold (default 80)\n"
                          "  --steps N         Motion interpolation steps, 1..200 (default 20)\n"
-                         "  --gesture-easing MODE linear (default) or smoothstep; gesture only\n"
+                         "  --gesture-easing MODE linear (default), smoothstep or ease-out-quad; gesture only\n"
+                         "  --gesture-field-scale-x/y N Scale translation and scroll delta fields; gesture only\n"
                          "  --gesture-start-hold-ms N One-unit seed then wait; included in duration\n"
                          "  --gesture-end-hold-ms N Hold before ended, included in duration; gesture only\n"
                          "  --button BUTTON   left, right or middle (default left)\n"
@@ -107,6 +118,7 @@ asio::awaitable<int> run(int argc, char** argv, std::unique_ptr<Driver>& runtime
             arg != "--to-x" && arg != "--to-y" && arg != "--button" && arg != "--count" &&
             arg != "--delivery" && arg != "--duration-ms" && arg != "--steps" &&
             arg != "--gesture-start-hold-ms" && arg != "--gesture-easing" && arg != "--gesture-end-hold-ms" &&
+            arg != "--gesture-field-scale-x" && arg != "--gesture-field-scale-y" &&
             arg != "--max-dimension")
             throw std::runtime_error("Unknown option: " + arg);
         if (++i == argc || std::string(argv[i]).empty()) throw std::runtime_error("Missing value for " + arg);
@@ -131,6 +143,8 @@ asio::awaitable<int> run(int argc, char** argv, std::unique_ptr<Driver>& runtime
         else if (arg == "--delivery") { delivery = value; action_option = true; }
         else if (arg == "--duration-ms") { duration_ms = non_negative(value); action_option = true; duration_option = true; }
         else if (arg == "--gesture-easing") { gesture_easing = value; gesture_profile_option = true; }
+        else if (arg == "--gesture-field-scale-x") { gesture_field_scale_x = field_scale(value); gesture_profile_option = true; }
+        else if (arg == "--gesture-field-scale-y") { gesture_field_scale_y = field_scale(value); gesture_profile_option = true; }
         else if (arg == "--gesture-start-hold-ms") { gesture_start_hold_ms = non_negative(value); gesture_profile_option = true; }
         else if (arg == "--gesture-end-hold-ms") { gesture_end_hold_ms = non_negative(value); gesture_profile_option = true; }
         else if (arg == "--steps") { steps = positive(value); action_option = true; steps_option = true; }
@@ -138,8 +152,8 @@ asio::awaitable<int> run(int argc, char** argv, std::unique_ptr<Driver>& runtime
     }
     if (gesture_profile_option && !gesture)
         throw std::runtime_error("Gesture profile options require --gesture.");
-    if (gesture_easing != "linear" && gesture_easing != "smoothstep")
-        throw std::runtime_error("--gesture-easing must be linear or smoothstep.");
+    if (gesture_easing != "linear" && gesture_easing != "smoothstep" && gesture_easing != "ease-out-quad")
+        throw std::runtime_error("--gesture-easing must be linear, smoothstep or ease-out-quad.");
     if (gesture_click && !duration_option) duration_ms = 80;
     const bool motion = drag || gesture;
     const bool point_action = click || gesture_click;
@@ -327,6 +341,8 @@ asio::awaitable<int> run(int argc, char** argv, std::unique_ptr<Driver>& runtime
             request["gesture_easing"] = gesture_easing;
             request["gesture_end_hold_ms"] = gesture_end_hold_ms;
             request["gesture_start_hold_ms"] = gesture_start_hold_ms;
+            request["gesture_field_scale_x"] = gesture_field_scale_x;
+            request["gesture_field_scale_y"] = gesture_field_scale_y;
         }
         if (dry_run) {
             std::cout << "Validated " << (gesture ? "synthetic gesture" : "drag")
@@ -346,8 +362,10 @@ asio::awaitable<int> run(int argc, char** argv, std::unique_ptr<Driver>& runtime
                     selected.at("window_id").get<uint32_t>(), bounds_x, bounds_y, scale,
                     *from_x, *from_y, *to_x, *to_y,
                     static_cast<uint64_t>(duration_ms), static_cast<uint64_t>(steps),
-                    gesture_easing == "smoothstep" ? macos_gesture::Easing::smoothstep : macos_gesture::Easing::linear,
-                    static_cast<uint64_t>(gesture_end_hold_ms), static_cast<uint64_t>(gesture_start_hold_ms));
+                    gesture_easing == "smoothstep" ? macos_gesture::Easing::smoothstep :
+                    gesture_easing == "ease-out-quad" ? macos_gesture::Easing::ease_out_quad : macos_gesture::Easing::linear,
+                    static_cast<uint64_t>(gesture_end_hold_ms), static_cast<uint64_t>(gesture_start_hold_ms),
+                    gesture_field_scale_x, gesture_field_scale_y);
                 std::cout << "Synthetic gesture posted (effect unverified): " << request.dump() << '\n';
             } else {
                 macos_drag::Button drag_button = macos_drag::Button::left;
