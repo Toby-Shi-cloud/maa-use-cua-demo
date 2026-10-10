@@ -1,7 +1,7 @@
 # 本地 MaaFramework macOS 测试
 
 本分支的 cua-shot 通过公开 C API 调用本地已安装的 MaaFramework。
-截图使用 ScreenCaptureKit，输入可选 PostToPid（后台）或 GlobalEvent（前台）。
+截图使用 ScreenCaptureKit，输入可选 PostToPid（后台）、GlobalEvent（前台）或 Gesture（手势）。
 不链接 Cua SDK，不调用旧的 macos_drag / macos_gesture 实现。
 旧源码和实验记录保留作参考，不参与当前构建。
 
@@ -59,9 +59,18 @@ trycua 不编译 MaaFramework 源码，也不需要单独查找 OpenCV、Boost �
 
 - --delivery background：MaaFramework PostToPid。
 - --delivery foreground：MaaFramework GlobalEvent，会激活应用并使用真实鼠标，抬起后恢复光标位置。
+- --delivery gesture：MaaFramework Gesture，用于测试原生 iOS 应用的手势输入；需要本地 MaaFramework 安装版本包含 MaaMacOSInputMethod_Gesture 并完成对应后端实现。
+
+~~~sh
+./build-maafw/cua-shot --app Arknights --drag \
+  --from-x 900 --from-y 400 --to-x 500 --to-y 400 \
+  --duration-ms 500 --delivery gesture --dry-run
+~~~
+
+Gesture 模式仍通过框架公开的点击／滑动 API 执行；--dry-run 不初始化输入后端，不能验证 Gesture 后端是否已实现。
 
 点击和拖动调用 MaaControllerPostClickV2 / MaaControllerPostSwipeV2，插值及底层事件调度由框架负责。\n--steps 不再支持，请使用 --duration-ms 调整时长。
-contact 对应鼠标左/右/中键，不是真实多指触控。--button 可选 left/right/middle。
+--button left/right/middle 分别传入 contact 0/1/2。PostToPid 和 GlobalEvent 将其解释为鼠标左/右/中键；Gesture 的支持范围由框架实现决定，初始测试使用默认 left。
 --count 2 发送两次点击，不保证目标应用将其识别为系统双击。
 --output 保存的是输入前截图；发送成功只表示接口返回成功，请再次截图确认游戏响应。
 --gesture、--gesture-click 和全部 --gesture-* 参数均报错；CUA_GESTURE_* 环境变量不参与执行。
@@ -85,3 +94,35 @@ dry-run 仅检查应用包并显示路径及 Bundle ID，不执行启停。
 启停不要求已有可见窗口，不截图，不需要录屏权限，也不接受 --app 等窗口筛选参数。
 停止由 MaaFramework 读取 Bundle ID，再向匹配进程发送 Command-Q；运行中的目标需要辅助功能权限。
 不存在匹配的运行进程时，框架返回停止成功。命令等待框架返回结果，以退出码报告成功或失败。
+
+## 在我的 Mac 上的 Gesture 测试
+
+我的截图窗口大小是: 1971x1140
+
+### 点击测试
+
+```
+./build-maafw/cua-shot --app Arknights --click --x 1257 --y 972 --delivery gesture
+```
+得到：
+```
+backend=MaaFramework version=DEBUG_VERSION window=33407 delivery=gesture raw=1971x1140 image=1971x1140
+controller_coordinates=1257,972 -> 1257,972
+Input submitted; verify the game response with a new screenshot.
+```
+
+游戏中的表现：在主界面这个坐标用于点击「任务」
+
+### 移动测试
+
+```
+./build-maafw/cua-shot --app Arknights --drag --from-x 900 --from-y 500 --to-x 500 --to-y 500 --delivery gesture
+```
+得到：
+```
+backend=MaaFramework version=DEBUG_VERSION window=33407 delivery=gesture raw=1971x1140 image=1971x1140
+controller_coordinates=900,500 -> 500,500
+Input submitted; verify the game response with a new screenshot.
+```
+
+游戏中的表现：在较中间的位置执行手势「从右往左滑动」，可以用于常规关卡寻找和干员列表。

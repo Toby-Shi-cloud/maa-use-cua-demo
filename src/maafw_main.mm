@@ -133,17 +133,17 @@ int run(int argc, char **argv) {
     std::string arg = argv[i];
     if (arg == "--help" || arg == "-h") {
       std::cout
-          << "Installed MaaFramework C API runner (no Cua or synthetic "
-             "gestures)\n"
+          << "Installed MaaFramework C API runner (no Cua SDK)\n"
              "cua-shot --start-game PATH.app [--dry-run]\n"
              "cua-shot --stop-game PATH.app [--dry-run]\n"
              "cua-shot --list [--app NAME] [--all]\n"
              "cua-shot --app NAME --output image.png [--max-dimension N]\n"
              "cua-shot --app NAME --click --x X --y Y [--delivery "
-             "background|foreground]\n"
+             "background|foreground|gesture]\n"
              "cua-shot --app NAME --drag --from-x X --from-y Y --to-x X --to-y "
              "Y\n"
-             "  --delivery background: PostToPid; foreground: GlobalEvent\n"
+             "  --delivery background: PostToPid; foreground: GlobalEvent; "
+             "gesture: Gesture\n"
              "  --duration-ms N  Drag duration, 0..10000 (default 500)\n"
              "  Drag interpolation is handled by MaaFramework.\n"
              "  --button left|right|middle; --count 1|2 (click only)\n"
@@ -305,8 +305,10 @@ int run(int argc, char **argv) {
       (!o.fx || !o.fy || !o.tx || !o.ty || o.x || o.y || o.count != 1))
     throw std::runtime_error(
         "Drag requires start/end coordinates and no click count");
-  if (o.delivery != "background" && o.delivery != "foreground")
-    throw std::runtime_error("Invalid --delivery");
+  if (o.delivery != "background" && o.delivery != "foreground" &&
+      o.delivery != "gesture")
+    throw std::runtime_error(
+        "Invalid --delivery; expected background, foreground or gesture");
   if (o.button != "left" && o.button != "right" && o.button != "middle")
     throw std::runtime_error("Invalid --button");
   if (!o.output.empty() && fs::path(o.output).extension() != ".png")
@@ -345,7 +347,8 @@ int run(int argc, char **argv) {
   const auto method = !input || o.dry ? MaaMacOSInputMethod_None
                       : o.delivery == "foreground"
                           ? MaaMacOSInputMethod_GlobalEvent
-                          : MaaMacOSInputMethod_PostToPid;
+                      : o.delivery == "gesture" ? MaaMacOSInputMethod_Gesture
+                                                : MaaMacOSInputMethod_PostToPid;
   std::unique_ptr<MaaController, decltype(&MaaControllerDestroy)> controller(
       MaaMacOSControllerCreate(w.id, MaaMacOSScreencapMethod_ScreenCaptureKit,
                                method),
