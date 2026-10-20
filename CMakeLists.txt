@@ -18,6 +18,21 @@ target_link_libraries(cua-shot PRIVATE MaaFramework::MaaFramework Threads::Threa
   "-framework AppKit" "-framework ApplicationServices")
 target_compile_options(cua-shot PRIVATE -Wall -Wextra -Wpedantic)
 
+# Same runner as a signed App Sandbox .app bundle, to test game lifecycle from a sandboxed caller.
+add_executable(cua-shot-sandboxed MACOSX_BUNDLE src/maafw_main.mm)
+set_target_properties(cua-shot-sandboxed PROPERTIES
+  CXX_STANDARD 20 CXX_STANDARD_REQUIRED YES CXX_EXTENSIONS OFF
+  OBJCXX_STANDARD 20 OBJCXX_STANDARD_REQUIRED YES OBJCXX_EXTENSIONS OFF
+  MACOSX_BUNDLE_GUI_IDENTIFIER com.trycua.cua-shot-sandboxed
+  MACOSX_BUNDLE_BUNDLE_NAME cua-shot-sandboxed)
+target_link_libraries(cua-shot-sandboxed PRIVATE MaaFramework::MaaFramework Threads::Threads
+  "-framework AppKit" "-framework ApplicationServices")
+target_compile_options(cua-shot-sandboxed PRIVATE -Wall -Wextra -Wpedantic)
+set_property(TARGET cua-shot-sandboxed APPEND PROPERTY LINK_DEPENDS ${CMAKE_CURRENT_SOURCE_DIR}/resources/sandbox.entitlements)
+add_custom_command(TARGET cua-shot-sandboxed POST_BUILD
+  COMMAND codesign --force --sign - --entitlements ${CMAKE_CURRENT_SOURCE_DIR}/resources/sandbox.entitlements
+          $<TARGET_BUNDLE_DIR:cua-shot-sandboxed>)
+
 include(CTest)
 if(BUILD_TESTING)
   add_test(NAME cli_help COMMAND cua-shot --help)
@@ -33,4 +48,21 @@ if(BUILD_TESTING)
   set_tests_properties(reject_conflicting_game_actions PROPERTIES WILL_FAIL TRUE)
   add_test(NAME reject_game_window_selector COMMAND cua-shot --start-game Example.app --app Example)
   set_tests_properties(reject_game_window_selector PROPERTIES WILL_FAIL TRUE)
+
+  # End-to-end game lifecycle on TextEdit, run in order. cua-shot is the unsandboxed control.
+  set(e2e_app /System/Applications/TextEdit.app)
+  set(sandboxed_cmd $<TARGET_BUNDLE_CONTENT_DIR:cua-shot-sandboxed>/MacOS/cua-shot-sandboxed)
+  add_test(NAME e2e_00_cleanup COMMAND cua-shot --stop-game ${e2e_app})
+  add_test(NAME e2e_10_sandboxed_start COMMAND ${sandboxed_cmd} --start-game ${e2e_app})
+  add_test(NAME e2e_11_sandboxed_stop COMMAND ${sandboxed_cmd} --stop-game ${e2e_app})
+  add_test(NAME e2e_20_cleanup COMMAND cua-shot --stop-game ${e2e_app})
+  add_test(NAME e2e_30_control_start COMMAND cua-shot --start-game ${e2e_app})
+  add_test(NAME e2e_31_control_stop COMMAND cua-shot --stop-game ${e2e_app})
+  set_tests_properties(e2e_00_cleanup e2e_10_sandboxed_start e2e_11_sandboxed_stop
+    e2e_20_cleanup e2e_30_control_start e2e_31_control_stop PROPERTIES RUN_SERIAL TRUE TIMEOUT 60)
+  set_tests_properties(e2e_10_sandboxed_start PROPERTIES DEPENDS e2e_00_cleanup)
+  set_tests_properties(e2e_11_sandboxed_stop PROPERTIES DEPENDS e2e_10_sandboxed_start)
+  set_tests_properties(e2e_20_cleanup PROPERTIES DEPENDS e2e_11_sandboxed_stop)
+  set_tests_properties(e2e_30_control_start PROPERTIES DEPENDS e2e_20_cleanup)
+  set_tests_properties(e2e_31_control_stop PROPERTIES DEPENDS e2e_30_control_start)
 endif()

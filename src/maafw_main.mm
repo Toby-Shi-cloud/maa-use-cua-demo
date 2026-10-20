@@ -344,10 +344,18 @@ int run(int argc, char **argv) {
         "Screen Recording permission is required for this terminal");
   if (input && !o.dry && !AXIsProcessTrusted())
     throw std::runtime_error("Accessibility permission is required for input");
+#ifdef MaaMacOSInputMethod_Gesture
+  const auto gesture_method = MaaMacOSInputMethod_Gesture;
+#else
+  if (input && !o.dry && o.delivery == "gesture")
+    throw std::runtime_error(
+        "Installed MaaFramework has no Gesture input method");
+  const auto gesture_method = MaaMacOSInputMethod_None;
+#endif
   const auto method = !input || o.dry ? MaaMacOSInputMethod_None
                       : o.delivery == "foreground"
                           ? MaaMacOSInputMethod_GlobalEvent
-                      : o.delivery == "gesture" ? MaaMacOSInputMethod_Gesture
+                      : o.delivery == "gesture" ? gesture_method
                                                 : MaaMacOSInputMethod_PostToPid;
   std::unique_ptr<MaaController, decltype(&MaaControllerDestroy)> controller(
       MaaMacOSControllerCreate(w.id, MaaMacOSScreencapMethod_ScreenCaptureKit,
