@@ -280,13 +280,13 @@ int run(int argc, char **argv) {
     if (!controller)
       throw std::runtime_error("MaaFramework controller creation failed");
     auto *ctrl = controller.get();
-    if (wait_controller(ctrl, MaaControllerPostConnection(ctrl)) !=
+    if (MaaControllerWait(ctrl, MaaControllerPostConnection(ctrl)) !=
         MaaStatus_Succeeded)
       throw std::runtime_error("MaaFramework connection failed");
     const auto id = o.start_game
                         ? MaaControllerPostStartApp(ctrl, intent.c_str())
                         : MaaControllerPostStopApp(ctrl, intent.c_str());
-    if (wait_controller(ctrl, id) != MaaStatus_Succeeded)
+    if (MaaControllerWait(ctrl, id) != MaaStatus_Succeeded)
       throw std::runtime_error("MaaFramework game lifecycle operation failed; "
                                "check installed library and logs");
     std::cout << (o.start_game ? "Application launch succeeded.\n"

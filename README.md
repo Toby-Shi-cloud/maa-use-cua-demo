@@ -81,6 +81,7 @@ Gesture 模式仍通过框架公开的点击／滑动 API 执行；--dry-run 不
 ## 启动和停止游戏
 
 先在 MaaFramework 仓库编译并安装包含 macOS 启停实现的版本。
+启停使用 MaaControllerPostStartApp / MaaControllerPostStopApp，并在主线程调用 MaaControllerWait 等待结果；实际操作由框架的工作线程执行。等待期间不额外运行 Cocoa 主事件循环，以测试标准同步等待用法。
 两种操作都接收应用的 .app 路径，不是应用显示名或 Bundle ID。
 
 ~~~sh
@@ -92,8 +93,8 @@ Gesture 模式仍通过框架公开的点击／滑动 API 执行；--dry-run 不
 相对路径会转换为绝对路径；路径包含空格时请加引号。
 dry-run 仅检查应用包并显示路径及 Bundle ID，不执行启停。
 启停不要求已有可见窗口，不截图，不需要录屏权限，也不接受 --app 等窗口筛选参数。
-停止由 MaaFramework 读取 Bundle ID，再向匹配进程发送 Command-Q；运行中的目标需要辅助功能权限。
-不存在匹配的运行进程时，框架返回停止成功。命令等待框架返回结果，以退出码报告成功或失败。
+具体启停行为由已安装的 MaaFramework 实现决定，命令以其返回值报告成功或失败。
+命令等待框架操作完成，以退出码报告成功或失败；不存在匹配进程时，框架返回停止成功。
 
 ## 在我的 Mac 上的 Gesture 测试
 
